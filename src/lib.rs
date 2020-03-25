@@ -4,16 +4,6 @@
 
 extern crate alloc;
 
-mod shared_slice;
+pub mod rc;
 
-use crate::shared_slice::SharedSlice;
-
-pub struct ArcSlice<T> {
-    start: *const T,
-    end: *const T,
-    shared: *const SharedSlice<T>,
-}
-
-impl<T> ArcSlice<T> {
-
-}
+pub use rc::RcSlice;
