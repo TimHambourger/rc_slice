@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod slice_alloc;
 pub mod rc;
 
 pub use rc::RcSlice;

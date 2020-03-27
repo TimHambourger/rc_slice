@@ -3,7 +3,7 @@ use core::{
     marker::PhantomData,
     mem,
     ops::Deref,
-    ptr::NonNull,
+    ptr::{self, NonNull},
     slice,
 };
 use alloc::{
@@ -11,6 +11,8 @@ use alloc::{
     rc::{Rc, Weak},
     vec::Vec,
 };
+
+use crate::slice_alloc::SliceAlloc;
 
 // Relationship btwn RcSlice, RcSliceData, and RcSliceMutGuard:
 //
@@ -45,6 +47,9 @@ use alloc::{
 struct RcSliceData<T> {
     ptr: NonNull<T>,
     len: usize,
+    // An Option b/c we'll let this be None for length zero sublices. They
+    // don't need an underlying allocation.
+    alloc: Option<Rc<SliceAlloc<T>>>,
     // Really Cell<Option<NonNull<Self>>> where the pointer is obtained via
     // Rc<Self>::into_raw(). But we need RcSliceData<T> to be covariant
     // in T.
@@ -61,7 +66,7 @@ struct RcSliceMutGuard<T> {
     data: Weak<RcSliceData<T>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RcSlice<T> {
     data: Rc<RcSliceData<T>>,
     mut_guard: Rc<RcSliceMutGuard<T>>,
@@ -71,11 +76,19 @@ impl<T> RcSliceData<T> {
     fn from_boxed_slice(slice: Box<[T]>) -> Self {
         assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
         let len = slice.len();
-        // Waiting on stabilization of Box::into_raw_non_null
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(slice) as _) };
+        unsafe {
+            // Waiting on stabilization of Box::into_raw_non_null
+            let ptr = NonNull::new_unchecked(Box::into_raw(slice) as _);
+            let alloc = if len == 0 { None } else { Some(Rc::new(SliceAlloc::new(ptr, len))) };
+            Self::from_raw_parts(ptr, len, alloc)
+        }
+    }
+
+    unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
         RcSliceData {
             ptr,
             len,
+            alloc,
             left_child: Cell::new(None),
             right_child: Cell::new(None),
             phantom_item: PhantomData,
@@ -83,25 +96,43 @@ impl<T> RcSliceData<T> {
         }
     }
 
-    // TODO: add_left_child, add_right_child
-
-    fn get_left_child(&self) -> Option<&Self> {
-        Self::get_child(&self.left_child)
+    fn clone_left(&self) -> Rc<Self> {
+        let (ptr, len) = self.left_sub();
+        unsafe {
+            self.clone_child(&self.left_child, ptr, len)
+        }
     }
 
-    fn get_right_child(&self) -> Option<&Self> {
-        Self::get_child(&self.right_child)
+    fn clone_right(&self) -> Rc<Self> {
+        let (ptr, len) = self.right_sub();
+        unsafe {
+            self.clone_child(&self.right_child, ptr, len)
+        }
     }
 
-    fn get_child(cell: &Cell<Option<NonNull<()>>>) -> Option<&Self> {
-        cell.get().map(|ptr| unsafe { &*(ptr.as_ptr() as *const Self) })
+    unsafe fn clone_child(&self, cell: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
+        cell.get().map_or_else(
+            || {
+                let alloc = if len == 0 { None } else { self.alloc.clone() };
+                let new = Rc::new(Self::from_raw_parts(ptr, len, alloc));
+                let clone = new.clone();
+                cell.set(Some(NonNull::new_unchecked(Rc::into_raw(new) as _)));
+                clone
+            },
+            |ptr| {
+                let existing = Rc::from_raw(ptr.as_ptr() as *const Self);
+                let clone = existing.clone();
+                mem::forget(existing);
+                clone
+            }
+        )
     }
 
-    fn take_left_child(&mut self) -> Option<Rc<Self>> {
+    fn take_left(&mut self) -> Option<Rc<Self>> {
         Self::take_child(&mut self.left_child)
     }
 
-    fn take_right_child(&mut self) -> Option<Rc<Self>> {
+    fn take_right(&mut self) -> Option<Rc<Self>> {
         Self::take_child(&mut self.right_child)
     }
 
@@ -115,17 +146,17 @@ impl<T> RcSliceData<T> {
 
     fn right_sub(&self) -> (NonNull<T>, usize) {
         // TODO: Support ZSTs
-        (unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len / 2 + 1) as isize)) }, self.len - self.len / 2)
+        (unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len / 2) as isize)) }, self.len - self.len / 2)
     }
 }
 
 impl<T> Drop for RcSliceData<T> {
     fn drop(&mut self) {
         // Move the children out to decrement their strong counts and
-        // also to figure out what range of data to free, if any.
-        let left_child = self.take_left_child();
-        let right_child = self.take_right_child();
-        let (ptr, len) = match (left_child, right_child) {
+        // also to figure out what range of items to drop, if any.
+        let left = self.take_left();
+        let right = self.take_right();
+        let (p, len) = match (left, right) {
             (None, None) => (self.ptr, self.len),
             (Some(_), None) => {
                 // left child is present. Just drop right subslice
@@ -137,7 +168,11 @@ impl<T> Drop for RcSliceData<T> {
             },
             _ => return // Both children are present. Nothing more to do.
         };
-        let _ = unsafe { Vec::from_raw_parts(ptr.as_ptr() as _, len, len) };
+        // Use ptr::read to drop the items without freeing the underlying allocation.
+        // SliceAlloc handles freeing the underlying allocation.
+        for i in 0..len {
+            unsafe { ptr::read(p.as_ptr().offset(i as isize)); }
+        }
     }
 }
 
@@ -153,28 +188,59 @@ impl<T> RcSlice<T> {
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
         let data = Rc::new(RcSliceData::from_boxed_slice(slice));
         let mut_guard = Rc::new(RcSliceMutGuard { parent: None, data: Rc::downgrade(&data) });
-        RcSlice {
-            data,
-            mut_guard
-        }
+        RcSlice { data, mut_guard }
     }
 
     pub fn from_vec(vec: Vec<T>) -> Self {
         Self::from_boxed_slice(vec.into_boxed_slice())
     }
 
-    // TODO: into_boxed_slice, into_vec
+    pub fn clone_left(this: &Self) -> Self {
+        let data = this.data.clone_left();
+        let mut_guard = Rc::new(RcSliceMutGuard { parent: Some(this.mut_guard.clone()), data: Rc::downgrade(&data) });
+        RcSlice { data, mut_guard }
+    }
 
-    // TODO: clone_left, clone_right, split_off_left, split_off_right
+    pub fn clone_right(this: &Self) -> Self {
+        let data = this.data.clone_right();
+        let mut_guard = Rc::new(RcSliceMutGuard { parent: Some(this.mut_guard.clone()), data: Rc::downgrade(&data) });
+        RcSlice { data, mut_guard }
+    }
+
+    pub fn split_off_left(this: &mut Self) -> Self {
+        let left = Self::clone_left(this);
+        let right = Self::clone_right(this);
+        *this = right;
+        left
+    }
+
+    pub fn split_off_right(this: &mut Self) -> Self {
+        let left = Self::clone_left(this);
+        let right = Self::clone_right(this);
+        *this = left;
+        right
+    }
 
     // TODO: get_mut, make_mut
+    // TODO: into_mut
+    // TODO: into_boxed_slice, into_vec
+    // TODO: downgrade
+}
+
+impl<T> Clone for RcSlice<T> {
+    fn clone(&self) -> Self {
+        RcSlice {
+            data: self.data.clone(),
+            mut_guard: self.mut_guard.clone(),
+        }
+    }
 }
 
 impl<T> Deref for RcSlice<T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        &**self.data
+        &*self.data
     }
 }
 

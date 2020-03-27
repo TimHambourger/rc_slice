@@ -1,43 +1,85 @@
 extern crate rc_slice;
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use rc_slice::RcSlice;
 
-#[derive(Clone)]
-struct DropCounter<'a>(&'a Cell<u32>);
+struct DropTracker<'a>(&'static str, &'a RefCell<Vec<&'static str>>);
 
-impl<'a> Drop for DropCounter<'a> {
+impl<'a> Drop for DropTracker<'a> {
     fn drop(&mut self) {
-        self.0.set(self.0.get() + 1);
+        self.1.borrow_mut().push(self.0);
     }
 }
 
 
 #[test]
 fn drops_its_data() {
-    let drop_count = Cell::new(0);
+    let dropped = RefCell::new(Vec::<&str>::new());
+    RcSlice::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped)
+    ]);
 
-    {
-        let slice = RcSlice::from_vec(vec![DropCounter(&drop_count); 3]);
-        assert_eq!(0, drop_count.get());
-    }
-
-    assert_eq!(3, drop_count.get());
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
 }
 
 #[test]
-fn respects_strong_count() {
-    let drop_count = Cell::new(0);
+fn drops_only_when_no_strong_refs() {
+    let dropped = RefCell::new(Vec::<&str>::new());
 
     {
-        let slice = RcSlice::from_vec(vec![DropCounter(&drop_count); 3]);
+        let slice = RcSlice::from_vec(vec![
+            DropTracker("a", &dropped),
+            DropTracker("b", &dropped),
+            DropTracker("c", &dropped)
+        ]);
         {
-            let clone = slice.clone();
+            let _ = slice.clone();
         }
         // Still 0 even after clone is dropped
-        assert_eq!(0, drop_count.get());
+        assert_eq!(0, dropped.borrow().len());
     }
 
-    assert_eq!(3, drop_count.get());
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+}
+
+#[test]
+fn drops_when_subs_dropped() {
+    let dropped = RefCell::new(Vec::<&str>::new());
+
+    {
+        let mut slice = RcSlice::from_vec(vec![
+            DropTracker("a", &dropped),
+            DropTracker("b", &dropped),
+            DropTracker("c", &dropped)
+        ]);
+        {
+            RcSlice::split_off_left(&mut slice);
+        }
+        // We should've dropped the 1 item from the left subslice
+        dropped.borrow_mut().sort_unstable();
+        assert_eq!(&["a"], &dropped.borrow()[..]);
+    }
+
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+}
+
+#[test]
+fn derefs_to_slice() {
+    let slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
+    assert_eq!(&[0, 1, 2, 3], &*slice);
+}
+
+#[test]
+fn clone_derefs_to_subslice() {
+    let slice = RcSlice::from_vec(vec![0, 1, 2, 3, 4]);
+    let left = RcSlice::clone_left(&slice);
+    let right = RcSlice::clone_right(&slice);
+    assert_eq!(&[0, 1], &*left);
+    assert_eq!(&[2, 3, 4], &*right);
 }
