@@ -83,3 +83,24 @@ fn clone_derefs_to_subslice() {
     assert_eq!(&[0, 1], &*left);
     assert_eq!(&[2, 3, 4], &*right);
 }
+
+#[test]
+fn get_mut_allows_mutation() {
+    let mut slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
+    (*RcSlice::get_mut(&mut slice).unwrap())[0] = 4;
+    assert_eq!(&[4, 1, 2, 3], &*slice);
+}
+
+#[test]
+fn get_mut_prevents_unsafe_mutation() {
+    let mut slice1 = RcSlice::from_vec(vec![0, 1, 2, 3]);
+    let mut slice2 = RcSlice::split_off_right(&mut slice1);
+    {
+        let mut slice3 = RcSlice::clone_right(&slice2);
+        assert!(RcSlice::get_mut(&mut slice1).is_some());
+        assert!(RcSlice::get_mut(&mut slice2).is_none());
+        assert!(RcSlice::get_mut(&mut slice3).is_none());
+    }
+    assert!(RcSlice::get_mut(&mut slice1).is_some());
+    assert!(RcSlice::get_mut(&mut slice2).is_some());
+}

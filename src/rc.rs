@@ -20,15 +20,15 @@ use crate::slice_alloc::SliceAlloc;
 //
 //                s  t  r  o  n  g
 //     |-----------------------------------|
-//     |      strong             weak      v
-//   parent  ------->  parent  <-------  parent
-//                      | s                ^ s
-//                      | t                | t
-//                      | r                | r
-//                      | o                | o
-//                      | n                | n
-//            strong    v g      weak      | g
-//    child  ------->  child   <-------  child
+//     |      strong                       v
+//   parent  ------->  parent <---|      parent
+//                      | s       |        ^ s
+//                      | t       |w       | t
+//                      | r       |e       | r
+//                      | o       |a       | o
+//                      | n       |k       | n
+//            strong    v g       |        | g
+//    child  ------->  child      |----- child
 //     |                                   ^
 //     |-----------------------------------|
 //                s  t  r  o  n  g
@@ -36,9 +36,9 @@ use crate::slice_alloc::SliceAlloc;
 // Idea: Each RcSlice holds a strong ref to its RcSliceData. Parent
 // RcSliceDatas hold strong refs to their children RcSliceDatas, so that
 // dropping a child RcSlice doesn't cause its RcSliceData to get dropped
-// if there's still a parent RcSlice around. Each RcSlice also holds a
-// strong ref to an RcSliceMutGuard, which in turn holds a weak ref to
-// the RcSliceData and (optionally) a strong ref to its parent
+// if there's still a parent RcSlice around. Each RcSlice also holds an
+// optional strong ref to an RcSliceMutGuards, which in turn holds a weak
+// ref to the parent RcSliceData and an optional strong ref to its parent
 // RcSliceMutGuard. Idea there is you can't get an &mut RcSliceData if
 // there are weak refs around, so existence of the child RcSlice
 // prevents improperly obtaining an &mut [T] from the parent RcSlice.
@@ -62,14 +62,14 @@ struct RcSliceData<T> {
 
 #[derive(Debug)]
 struct RcSliceMutGuard<T> {
+    parent_data: Weak<RcSliceData<T>>,
     parent: Option<Rc<Self>>,
-    data: Weak<RcSliceData<T>>,
 }
 
 #[derive(Debug)]
 pub struct RcSlice<T> {
     data: Rc<RcSliceData<T>>,
-    mut_guard: Rc<RcSliceMutGuard<T>>,
+    mut_guard: Option<Rc<RcSliceMutGuard<T>>>,
 }
 
 impl<T> RcSliceData<T> {
@@ -184,11 +184,19 @@ impl<T> Deref for RcSliceData<T> {
     }
 }
 
+impl<T> RcSliceMutGuard<T> {
+    fn new(parent_slice: &RcSlice<T>) -> Self {
+        RcSliceMutGuard {
+            parent_data: Rc::downgrade(&parent_slice.data),
+            parent: parent_slice.mut_guard.clone(),
+        }
+    }
+}
+
 impl<T> RcSlice<T> {
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
         let data = Rc::new(RcSliceData::from_boxed_slice(slice));
-        let mut_guard = Rc::new(RcSliceMutGuard { parent: None, data: Rc::downgrade(&data) });
-        RcSlice { data, mut_guard }
+        RcSlice { data, mut_guard: None }
     }
 
     pub fn from_vec(vec: Vec<T>) -> Self {
@@ -197,13 +205,13 @@ impl<T> RcSlice<T> {
 
     pub fn clone_left(this: &Self) -> Self {
         let data = this.data.clone_left();
-        let mut_guard = Rc::new(RcSliceMutGuard { parent: Some(this.mut_guard.clone()), data: Rc::downgrade(&data) });
+        let mut_guard = Some(Rc::new(RcSliceMutGuard::new(&this)));
         RcSlice { data, mut_guard }
     }
 
     pub fn clone_right(this: &Self) -> Self {
         let data = this.data.clone_right();
-        let mut_guard = Rc::new(RcSliceMutGuard { parent: Some(this.mut_guard.clone()), data: Rc::downgrade(&data) });
+        let mut_guard = Some(Rc::new(RcSliceMutGuard::new(&this)));
         RcSlice { data, mut_guard }
     }
 
@@ -221,10 +229,27 @@ impl<T> RcSlice<T> {
         right
     }
 
-    // TODO: get_mut, make_mut
+    pub fn get_mut(this: &mut Self) -> Option<&mut [T]> {
+        // Our system of strong and weak references guarantees that if we
+        // can get a mutable reference into our data, then there are no
+        // outstanding references to any slices overlapping this one.
+        // (Our binary tree structure guarantees that the only kinds of
+        // overlaps are "is contained in" and "contains".) So if we can
+        // get a mutable reference into our data, then it's safe to call
+        // slice::from_raw_parts_mut. See the longish comment at the top
+        // of this file for more.
+        match Rc::get_mut(&mut this.data) {
+            Some(RcSliceData { ptr, len, ..}) => Some(unsafe { slice::from_raw_parts_mut(ptr.as_ptr(), *len) }),
+            None => None
+        }
+    }
+
+    // TODO: make_mut
     // TODO: into_mut
     // TODO: into_boxed_slice, into_vec
     // TODO: downgrade
+    // TODO: split_into_parts
+    // TODO: clone_parts
 }
 
 impl<T> Clone for RcSlice<T> {
