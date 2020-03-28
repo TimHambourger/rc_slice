@@ -12,6 +12,30 @@ impl<'a> Drop for DropTracker<'a> {
     }
 }
 
+#[test]
+fn is_covariant() {
+    #[allow(unused_variables)]
+    fn use_slice<'a>(n: &'a u32, slice: &RcSlice<&'a u32>) {
+    }
+
+    let slice = RcSlice::from_vec(vec![&0]);
+    // Important that x is declared after slice.
+    let x = 0;
+    // If RcSlice<T> were invariant in T, then the next line would give
+    // error[E0597]: `x` does not live long enough
+    //   --> tests/test_rc_slice.rs:37:15
+    //    |
+    // 37 |     use_slice(&x, &slice)
+    //    |               ^^ borrowed value does not live long enough
+    // 38 | }
+    //    | -
+    //    | |
+    //    | `x` dropped here while still borrowed
+    //    | borrow might be used here, when `slice` is dropped and runs the destructor for type `rc_slice::RcSlice<&u32>`
+    //    |
+    //    = note: values in a scope are dropped in the opposite order they are defined
+    use_slice(&x, &slice)
+}
 
 #[test]
 fn drops_its_data() {

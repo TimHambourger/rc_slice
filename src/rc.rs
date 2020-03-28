@@ -92,7 +92,7 @@ impl<T> RcSliceData<T> {
             left_child: Cell::new(None),
             right_child: Cell::new(None),
             phantom_item: PhantomData,
-            phantom_child: PhantomData
+            phantom_child: PhantomData,
         }
     }
 
