@@ -15,6 +15,7 @@ use alloc::{
 use crate::slice_alloc::SliceAlloc;
 use crate::rc::RcSliceMut;
 
+// TODO: Update this comment...
 // Relationship btwn RcSlice, RcSliceData, and DataGuard:
 //
 // RcSlice          RcSliceData         DataGuard
@@ -58,15 +59,24 @@ pub (in crate::rc) struct RcSliceData<T> {
     left_child: Cell<Option<NonNull<()>>>,
     // Ditto left_child on really Cell<Option<NonNull<Self>>>
     right_child: Cell<Option<NonNull<()>>>,
-    parent: Weak<Self>,
-    guard: RefCell<Weak<DataGuard>>,
+    guard: Rc<GuardTether>,
     phantom_item: PhantomData<T>,
     phantom_child: PhantomData<Self>,
 }
 
+/// Signals the presence of child RcSlices, thus allowing us to tell whether
+/// it's safe to mutate the parent RcSliceData.
 #[derive(Debug)]
 struct DataGuard {
     parent: Option<Rc<Self>>,
+}
+
+/// Loosely tethers an RcSliceData to a DataGuard so that it's possible to
+/// reconstruct a DataGuard from an RcSliceData.
+#[derive(Debug)]
+struct GuardTether {
+    parent: Weak<Self>,
+    guard: RefCell<Weak<DataGuard>>,
 }
 
 /// A reference counted slice that tracks reference counts per
@@ -90,43 +100,46 @@ impl<T> RcSliceData<T> {
             // Waiting on stabilization of Box::into_raw_non_null
             let ptr = NonNull::new_unchecked(Box::into_raw(slice) as _);
             let alloc = if len == 0 { None } else { Some(Rc::new(SliceAlloc::new(ptr, len))) };
-            Self::from_raw_parts(ptr, len, alloc, Weak::new())
+            Self::from_raw_parts(ptr, len, alloc)
         }
     }
 
-    pub (in crate::rc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>, parent: Weak<Self>) -> Self {
+    pub (in crate::rc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
+        Self::from_rawer_parts(ptr, len, alloc, GuardTether::new(Weak::new()))
+    }
+
+    fn from_rawer_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>, guard: GuardTether) -> Self {
         RcSliceData {
             ptr,
             len,
             alloc,
-            parent,
             left_child: Cell::new(None),
             right_child: Cell::new(None),
-            guard: RefCell::new(Weak::new()),
+            guard: Rc::new(guard),
             phantom_item: PhantomData,
             phantom_child: PhantomData,
         }
     }
 
-    fn clone_left(self: &Rc<Self>) -> Rc<Self> {
+    fn clone_left(&self) -> Rc<Self> {
         let (ptr, len) = self.left_sub();
         unsafe {
             self.clone_child(&self.left_child, ptr, len)
         }
     }
 
-    fn clone_right(self: &Rc<Self>) -> Rc<Self> {
+    fn clone_right(&self) -> Rc<Self> {
         let (ptr, len) = self.right_sub();
         unsafe {
             self.clone_child(&self.right_child, ptr, len)
         }
     }
 
-    unsafe fn clone_child(self: &Rc<Self>, cell: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
+    unsafe fn clone_child(&self, cell: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
         cell.get().map_or_else(
             || {
                 let alloc = if len == 0 { None } else { self.alloc.clone() };
-                let new = Rc::new(Self::from_raw_parts(ptr, len, alloc, Rc::downgrade(self)));
+                let new = Rc::new(Self::from_rawer_parts(ptr, len, alloc, GuardTether::new(Rc::downgrade(&self.guard))));
                 let clone = new.clone();
                 cell.set(Some(NonNull::new_unchecked(Rc::into_raw(new) as _)));
                 clone
@@ -198,18 +211,28 @@ impl<T> Deref for RcSliceData<T> {
 
 impl DataGuard {
     fn guard<T>(data: &RcSliceData<T>) -> Rc<Self> {
-        let existing_guard = data.guard.borrow().upgrade();
+        Self::from_guard_tether(&data.guard)
+    }
+
+    fn from_guard_tether(tether: &GuardTether) -> Rc<Self> {
+        let existing_guard = tether.guard.borrow().upgrade();
         existing_guard.unwrap_or_else(|| {
             // No reference to a live existing guard. If our parent is still alive,
             // guard IT and use that returned guard as our parent. Otherwise we have
             // no parent guard.
-            let parent_guard = data.parent.upgrade()
-                .map(|parent_data| Self::guard(&parent_data));
+            let parent_guard = tether.parent.upgrade()
+                .map(|parent_tether| Self::from_guard_tether(&parent_tether));
             let guard = Rc::new(DataGuard { parent: parent_guard });
             // Save a weak ref to the new guard in the passed data instance
-            *data.guard.borrow_mut() = Rc::downgrade(&guard);
+            *tether.guard.borrow_mut() = Rc::downgrade(&guard);
             guard
         })
+    }
+}
+
+impl GuardTether {
+    fn new(parent: Weak<Self>) -> Self {
+        GuardTether { parent, guard: RefCell::new(Weak::new()) }
     }
 }
 
@@ -318,7 +341,7 @@ impl<T> Deref for RcSlice<T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        &*self.data
+        &self.data
     }
 }
 
@@ -341,8 +364,8 @@ impl<T> WeakSlice<T> {
         WeakSlice { data: Weak::new() }
     }
 
-    pub fn upgrade(this: &Self) -> Option<RcSlice<T>> {
-        this.data.upgrade().map(RcSlice::from_data)
+    pub fn upgrade(&self) -> Option<RcSlice<T>> {
+        self.data.upgrade().map(RcSlice::from_data)
     }
 }
 
