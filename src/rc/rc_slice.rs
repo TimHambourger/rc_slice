@@ -15,7 +15,6 @@ use alloc::{
 use crate::slice_alloc::SliceAlloc;
 use crate::rc::RcSliceMut;
 
-// TODO: Update this comment...
 // Relationship btwn RcSlice, RcSliceData, and DataGuard:
 //
 // RcSlice          RcSliceData         DataGuard
@@ -59,24 +58,17 @@ pub (in crate::rc) struct RcSliceData<T> {
     left_child: Cell<Option<NonNull<()>>>,
     // Ditto left_child on really Cell<Option<NonNull<Self>>>
     right_child: Cell<Option<NonNull<()>>>,
-    guard: Rc<GuardTether>,
+    parent: Weak<Self>,
+    guard: RefCell<Weak<DataGuard>>,
     phantom_item: PhantomData<T>,
     phantom_child: PhantomData<Self>,
 }
 
-/// Signals the presence of child RcSlices, thus allowing us to tell whether
-/// it's safe to mutate the parent RcSliceData.
+/// Signals the presence of child RcSlices or WeakSlices for the same
+/// data subslice. Part of detecting which mutations are possible.
 #[derive(Debug)]
 struct DataGuard {
     parent: Option<Rc<Self>>,
-}
-
-/// Loosely tethers an RcSliceData to a DataGuard so that it's possible to
-/// reconstruct a DataGuard from an RcSliceData.
-#[derive(Debug)]
-struct GuardTether {
-    parent: Weak<Self>,
-    guard: RefCell<Weak<DataGuard>>,
 }
 
 /// A reference counted slice that tracks reference counts per
@@ -90,6 +82,8 @@ pub struct RcSlice<T> {
 #[derive(Debug)]
 pub struct WeakSlice<T> {
     data: Weak<RcSliceData<T>>,
+    // Not used except as part of signaling the presence of WeakSlices to RcSlice::get_mut
+    _data_guard: Weak<DataGuard>,
 }
 
 impl<T> RcSliceData<T> {
@@ -100,46 +94,47 @@ impl<T> RcSliceData<T> {
             // Waiting on stabilization of Box::into_raw_non_null
             let ptr = NonNull::new_unchecked(Box::into_raw(slice) as _);
             let alloc = if len == 0 { None } else { Some(Rc::new(SliceAlloc::new(ptr, len))) };
-            Self::from_raw_parts(ptr, len, alloc)
+            Self::from_data_parts(ptr, len, alloc)
         }
     }
 
-    pub (in crate::rc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
-        Self::from_rawer_parts(ptr, len, alloc, GuardTether::new(Weak::new()))
+    pub (in crate::rc) unsafe fn from_data_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
+        Self::with_data_and_parent(ptr, len, alloc, Weak::new())
     }
 
-    fn from_rawer_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>, guard: GuardTether) -> Self {
+    fn with_data_and_parent(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>, parent: Weak<Self>) -> Self {
         RcSliceData {
             ptr,
             len,
             alloc,
+            parent,
             left_child: Cell::new(None),
             right_child: Cell::new(None),
-            guard: Rc::new(guard),
+            guard: RefCell::new(Weak::new()),
             phantom_item: PhantomData,
             phantom_child: PhantomData,
         }
     }
 
-    fn clone_left(&self) -> Rc<Self> {
+    fn clone_left(self: &Rc<Self>) -> Rc<Self> {
         let (ptr, len) = self.left_sub();
         unsafe {
             self.clone_child(&self.left_child, ptr, len)
         }
     }
 
-    fn clone_right(&self) -> Rc<Self> {
+    fn clone_right(self: &Rc<Self>) -> Rc<Self> {
         let (ptr, len) = self.right_sub();
         unsafe {
             self.clone_child(&self.right_child, ptr, len)
         }
     }
 
-    unsafe fn clone_child(&self, cell: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
+    unsafe fn clone_child(self: &Rc<Self>, cell: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
         cell.get().map_or_else(
             || {
                 let alloc = if len == 0 { None } else { self.alloc.clone() };
-                let new = Rc::new(Self::from_rawer_parts(ptr, len, alloc, GuardTether::new(Rc::downgrade(&self.guard))));
+                let new = Rc::new(Self::with_data_and_parent(ptr, len, alloc, Rc::downgrade(self)));
                 let clone = new.clone();
                 cell.set(Some(NonNull::new_unchecked(Rc::into_raw(new) as _)));
                 clone
@@ -211,28 +206,18 @@ impl<T> Deref for RcSliceData<T> {
 
 impl DataGuard {
     fn guard<T>(data: &RcSliceData<T>) -> Rc<Self> {
-        Self::from_guard_tether(&data.guard)
-    }
-
-    fn from_guard_tether(tether: &GuardTether) -> Rc<Self> {
-        let existing_guard = tether.guard.borrow().upgrade();
+        let existing_guard = data.guard.borrow().upgrade();
         existing_guard.unwrap_or_else(|| {
             // No reference to a live existing guard. If our parent is still alive,
             // guard IT and use that returned guard as our parent. Otherwise we have
             // no parent guard.
-            let parent_guard = tether.parent.upgrade()
-                .map(|parent_tether| Self::from_guard_tether(&parent_tether));
+            let parent_guard = data.parent.upgrade()
+                .map(|parent_data| Self::guard(&parent_data));
             let guard = Rc::new(DataGuard { parent: parent_guard });
             // Save a weak ref to the new guard in the passed data instance
-            *tether.guard.borrow_mut() = Rc::downgrade(&guard);
+            *data.guard.borrow_mut() = Rc::downgrade(&guard);
             guard
         })
-    }
-}
-
-impl GuardTether {
-    fn new(parent: Weak<Self>) -> Self {
-        GuardTether { parent, guard: RefCell::new(Weak::new()) }
     }
 }
 
@@ -280,17 +265,19 @@ impl<T> RcSlice<T> {
         // RcSliceDatas: We hold no strong ref to any RcSliceData but our
         // own, so the only way any WeakSlice could still hold an active
         // reference to one of those other RcSliceDatas would be if there
-        // was also another RcSlice around. So, to put it all together, we
-        // just need to do two checks: Make sure we're the only strong or
-        // weak ref to our RcSliceData, which also accomplishes the check
-        // on ancestor RcSliceDatas, and make sure we're the only strong
-        // ref to our DataGuard, which also accomplishes the check on
-        // descendant RcSliceDatas.
-        if 1 == Rc::strong_count(&this.data_guard) {
-            // Ack! Now the weak refs from child RcSliceDatas are screwing this up.
-            Rc::get_mut(&mut this.data).map(|RcSliceData { ptr, len, .. }| unsafe {
-                slice::from_raw_parts_mut(ptr.as_ptr(), *len)
-            })
+        // was also another RcSlice around.
+        let safe_to_mut =
+            // We're the only strong ref to our data_guard. Checks that
+            // there are no child RcSlices.
+            1 == Rc::strong_count(&this.data_guard) &&
+            // We're the only strong ref to our data. Checks that there
+            // are no parent RcSlices.
+            1 == Rc::strong_count(&this.data) &&
+            // Our data holds the only weak ref to our data guard. Checks
+            // that there are no WeakSlices pointing to our same data.
+            1 == Rc::weak_count(&this.data_guard);
+        if safe_to_mut {
+            unsafe { Some(slice::from_raw_parts_mut((*this.data).ptr.as_ptr(), (*this.data).len)) }
         } else {
             None
         }
@@ -319,7 +306,7 @@ impl<T> RcSlice<T> {
     }
 
     pub fn downgrade(this: &Self) -> WeakSlice<T> {
-        WeakSlice { data: Rc::downgrade(&this.data) }
+        WeakSlice { data: Rc::downgrade(&this.data), _data_guard: Rc::downgrade(&this.data_guard) }
     }
 
     // TODO: make_mut
@@ -361,7 +348,7 @@ impl<T> WeakSlice<T> {
     /// Constructs a new `WeakSlice<T>`, without allocating any memory.
     /// Calling `upgrade` on the return value always gives `None`.
     pub fn new() -> Self {
-        WeakSlice { data: Weak::new() }
+        WeakSlice { data: Weak::new(), _data_guard: Weak::new() }
     }
 
     pub fn upgrade(&self) -> Option<RcSlice<T>> {
@@ -371,6 +358,6 @@ impl<T> WeakSlice<T> {
 
 impl<T> Clone for WeakSlice<T> {
     fn clone(&self) -> WeakSlice<T> {
-        WeakSlice { data: self.data.clone() }
+        WeakSlice { data: self.data.clone(), _data_guard: self._data_guard.clone() }
     }
 }

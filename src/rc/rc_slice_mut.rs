@@ -48,7 +48,7 @@ impl<T> RcSliceMut<T> {
     }
 
     pub fn into_immut(mut this: Self) -> RcSlice<T> {
-        let data = unsafe { Rc::new(RcSliceData::from_raw_parts(this.ptr, this.len, this.alloc.take())) };
+        let data = unsafe { Rc::new(RcSliceData::from_data_parts(this.ptr, this.len, this.alloc.take())) };
         RcSlice::from_data(data)
     }
 
