@@ -1,9 +1,7 @@
 use core::{
-    marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
-    ptr::{self, NonNull},
-    slice,
+    ptr::NonNull,
 };
 use alloc::{
     boxed::Box,
@@ -12,19 +10,17 @@ use alloc::{
 };
 
 use crate::{
+    internal::slice_model::{SliceAlloc, SliceItems},
     rc::rc_slice::{RcSlice, RcSliceData},
-    slice_alloc::SliceAlloc
 };
 
 /// A unique reference to a subslice of a reference counted slice.
 #[derive(Debug)]
 pub struct RcSliceMut<T> {
-    ptr: NonNull<T>,
-    len: usize,
+    items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
     // don't need an underlying allocation.
     alloc: Option<Rc<SliceAlloc<T>>>,
-    phantom: PhantomData<T>,
 }
 
 impl<T> RcSliceMut<T> {
@@ -44,39 +40,51 @@ impl<T> RcSliceMut<T> {
     }
 
     pub(in crate::rc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
-        RcSliceMut { ptr, len, alloc, phantom: PhantomData }
+        RcSliceMut { items: SliceItems::new(ptr, len), alloc }
     }
 
-    pub fn into_immut(mut this: Self) -> RcSlice<T> {
-        let data = unsafe { Rc::new(RcSliceData::from_data_parts(this.ptr, this.len, this.alloc.take())) };
+    pub fn split_off_left(this: &mut Self) -> Self {
+        let new_items = this.items.split_off_left();
+        RcSliceMut { items: new_items, alloc: this.alloc.clone() }
+    }
+
+    pub fn split_off_right(this: &mut Self) -> Self {
+        let new_items = this.items.split_off_right();
+        RcSliceMut { items: new_items, alloc: this.alloc.clone() }
+    }
+
+    pub fn into_immut(this: Self) -> RcSlice<T> {
+        let RcSliceMut { items, mut alloc } = this;
+        let (ptr, len) = SliceItems::into_raw_parts(items);
+        let data = unsafe { Rc::new(RcSliceData::from_data_parts(ptr, len, alloc.take())) };
         RcSlice::from_data(data)
     }
 
-    // TODO: split_off_left
-    // TODO: split_off_right
     // TODO: split_into_parts
-}
-
-impl<T> Drop for RcSliceMut<T> {
-    fn drop(&mut self) {
-        // Use ptr::read to drop the items without freeing the underlying allocation.
-        // SliceAlloc handles freeing the underlying allocation.
-        for i in 0..self.len {
-            unsafe { ptr::read(self.ptr.as_ptr().offset(i as isize)); }
-        }
-    }
 }
 
 impl<T> Deref for RcSliceMut<T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        &self.items
     }
 }
 
 impl<T> DerefMut for RcSliceMut<T> {
     fn deref_mut(&mut self) -> &mut [T] {
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        &mut self.items
+    }
+}
+
+impl<T> From<Box<[T]>> for RcSliceMut<T> {
+    fn from(slice: Box<[T]>) -> Self {
+        Self::from_boxed_slice(slice)
+    }
+}
+
+impl<T> From<Vec<T>> for RcSliceMut<T> {
+    fn from(vec: Vec<T>) -> Self {
+        Self::from_vec(vec)
     }
 }

@@ -12,8 +12,10 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::slice_alloc::SliceAlloc;
-use crate::rc::RcSliceMut;
+use crate::{
+    internal::slice_model::SliceAlloc,
+    rc::RcSliceMut,
+};
 
 // Relationship btwn RcSlice, RcSliceData, and DataGuard:
 //
@@ -68,7 +70,9 @@ pub (in crate::rc) struct RcSliceData<T> {
 /// data subslice. Part of detecting which mutations are possible.
 #[derive(Debug)]
 struct DataGuard {
-    parent: Option<Rc<Self>>,
+    // Not used except in the fact that a child DataGuard keeps its
+    // parent DataGuard alive.
+    _parent: Option<Rc<Self>>,
 }
 
 /// A reference counted slice that tracks reference counts per
@@ -168,6 +172,28 @@ impl<T> RcSliceData<T> {
         // TODO: Support ZSTs
         (unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len / 2) as isize)) }, self.len - self.len / 2)
     }
+
+    /// Convert this RcSliceData into an RcSliceMut. Unsafe b/c calling code
+    /// must ensure that there are no strong refs to any other RcSliceData
+    /// overlapping this one.
+    unsafe fn into_mut(mut self) -> RcSliceMut<T> {
+        let slice_mut = RcSliceMut::from_raw_parts(self.ptr, self.len, self.alloc.take());
+        // We don't want to drop the items in this subslice when self gets dropped,
+        // b/c we've transferred their ownership to slice_mut. But we DO wanna drop
+        // things like our strong refs to our child datas, ref cells with the weak
+        // refs to our data guards, etc, to avoid leaking all that.
+        self.forget_items();
+        slice_mut
+    }
+
+    fn forget_items(&mut self) {
+        // Recursively tell left child to forget its items
+        self.take_left().map(|child| Rc::try_unwrap(child).map(|mut child| child.forget_items()));
+        // Recursively tell right child to forget its items
+        self.take_right().map(|child| Rc::try_unwrap(child).map(|mut child| child.forget_items()));
+        // Setting len to 0 turns our Drop impl into a no-op.
+        self.len = 0;
+    }
 }
 
 impl<T> Drop for RcSliceData<T> {
@@ -213,7 +239,7 @@ impl DataGuard {
             // no parent guard.
             let parent_guard = data.parent.upgrade()
                 .map(|parent_data| Self::guard(&parent_data));
-            let guard = Rc::new(DataGuard { parent: parent_guard });
+            let guard = Rc::new(DataGuard { _parent: parent_guard });
             // Save a weak ref to the new guard in the passed data instance
             *data.guard.borrow_mut() = Rc::downgrade(&guard);
             guard
@@ -296,9 +322,7 @@ impl<T> RcSlice<T> {
                     // Error unwrapping data. Reconstruct our RcSlice
                     Err(RcSlice { data, data_guard })
                 },
-                |mut data| unsafe {
-                    Ok(RcSliceMut::from_raw_parts(data.ptr, data.len, data.alloc.take()))
-                }
+                |data| unsafe { Ok(data.into_mut()) }
             )
         } else {
             Err(this)

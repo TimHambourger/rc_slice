@@ -1,16 +1,11 @@
 extern crate rc_slice;
 
+mod test_utils;
+
 use std::cell::RefCell;
 
 use rc_slice::RcSlice;
-
-struct DropTracker<'a>(&'static str, &'a RefCell<Vec<&'static str>>);
-
-impl<'a> Drop for DropTracker<'a> {
-    fn drop(&mut self) {
-        self.1.borrow_mut().push(self.0);
-    }
-}
+use test_utils::DropTracker;
 
 #[test]
 fn is_covariant() {
@@ -43,7 +38,7 @@ fn drops_its_data() {
     RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
-        DropTracker("c", &dropped)
+        DropTracker("c", &dropped),
     ]);
 
     dropped.borrow_mut().sort_unstable();
@@ -58,7 +53,7 @@ fn drops_only_when_no_strong_refs() {
         let slice = RcSlice::from_vec(vec![
             DropTracker("a", &dropped),
             DropTracker("b", &dropped),
-            DropTracker("c", &dropped)
+            DropTracker("c", &dropped),
         ]);
         {
             let _ = slice.clone();
@@ -79,7 +74,7 @@ fn drops_when_subs_dropped() {
         let mut slice = RcSlice::from_vec(vec![
             DropTracker("a", &dropped),
             DropTracker("b", &dropped),
-            DropTracker("c", &dropped)
+            DropTracker("c", &dropped),
         ]);
         {
             RcSlice::split_off_left(&mut slice);
@@ -156,7 +151,7 @@ fn downgrade_lets_slice_get_dropped() {
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
-        DropTracker("c", &dropped)
+        DropTracker("c", &dropped),
     ]);
     let weak_slice = RcSlice::downgrade(&slice);
 
@@ -173,7 +168,7 @@ fn downgrade_child_then_upgrade() {
     let parent = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
-        DropTracker("c", &dropped)
+        DropTracker("c", &dropped),
     ]);
     let child = RcSlice::clone_right(&parent);
     let weak_child = RcSlice::downgrade(&child);
@@ -192,7 +187,7 @@ fn downgrade_parent_then_upgrade() {
     let parent = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
-        DropTracker("c", &dropped)
+        DropTracker("c", &dropped),
     ]);
     let child = RcSlice::clone_right(&parent);
     let weak_parent = RcSlice::downgrade(&parent);
@@ -265,4 +260,26 @@ fn into_mut_tolerates_weak_slices() {
     assert_eq!(&[0, 1, 2, 3, 4], &*slice);
     // And weak_slice is no longer upgradeable
     assert!(weak_slice.upgrade().is_none());
+}
+
+#[test]
+fn into_mut_doesnt_drop() {
+    let dropped = RefCell::new(Vec::<&str>::new());
+    let slice = RcSlice::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+    ]);
+    // Create some child slices to exercise the recursive logic in
+    // RcSliceData::forget_items.
+    RcSlice::clone_left(&RcSlice::clone_right(&slice));
+    RcSlice::clone_left(&slice);
+    assert_eq!(0, dropped.borrow().len());
+    let slice_mut = RcSlice::into_mut(slice).unwrap();
+    // Not dropped yet
+    assert_eq!(0, dropped.borrow().len());
+    drop(slice_mut);
+    // Now items are dropped
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
 }
