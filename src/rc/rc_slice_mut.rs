@@ -1,4 +1,5 @@
 use core::{
+    convert::TryFrom,
     mem,
     ops::{Deref, DerefMut},
     ptr::NonNull,
@@ -86,5 +87,13 @@ impl<T> From<Box<[T]>> for RcSliceMut<T> {
 impl<T> From<Vec<T>> for RcSliceMut<T> {
     fn from(vec: Vec<T>) -> Self {
         Self::from_vec(vec)
+    }
+}
+
+impl<T> TryFrom<RcSlice<T>> for RcSliceMut<T> {
+    type Error = RcSlice<T>;
+
+    fn try_from(slice: RcSlice<T>) -> Result<Self, RcSlice<T>> {
+        RcSlice::into_mut(slice)
     }
 }

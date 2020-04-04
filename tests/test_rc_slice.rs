@@ -104,6 +104,19 @@ fn clone_derefs_to_subslice() {
 }
 
 #[test]
+fn clone_tolerates_small_slices() {
+    // To make sure our short-circuiting for small slices doesn't break anything
+    let slice = RcSlice::from_vec(vec![0]);
+    assert_eq!(1, slice.len());
+    let left = RcSlice::clone_left(&slice);
+    let right = RcSlice::clone_right(&slice);
+    assert_eq!(0, left.len());
+    assert_eq!(1, right.len());
+    let left_left = RcSlice::clone_left(&left);
+    assert_eq!(0, left_left.len());
+}
+
+#[test]
 fn get_mut_allows_mutation() {
     let mut slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
     (*RcSlice::get_mut(&mut slice).unwrap())[0] = 4;

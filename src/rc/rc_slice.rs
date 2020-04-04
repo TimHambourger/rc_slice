@@ -121,16 +121,24 @@ impl<T> RcSliceData<T> {
     }
 
     fn clone_left(self: &Rc<Self>) -> Rc<Self> {
-        let (ptr, len) = self.left_sub();
-        unsafe {
-            self.clone_child(&self.left_child, ptr, len)
+        if self.len == 0 {
+            self.clone()
+        } else {
+            let (ptr, len) = self.left_sub();
+            unsafe {
+                self.clone_child(&self.left_child, ptr, len)
+            }
         }
     }
 
     fn clone_right(self: &Rc<Self>) -> Rc<Self> {
-        let (ptr, len) = self.right_sub();
-        unsafe {
-            self.clone_child(&self.right_child, ptr, len)
+        if self.len <= 1 {
+            self.clone()
+        } else {
+            let (ptr, len) = self.right_sub();
+            unsafe {
+                self.clone_child(&self.right_child, ptr, len)
+            }
         }
     }
 
@@ -365,6 +373,12 @@ impl<T> From<Box<[T]>> for RcSlice<T> {
 impl<T> From<Vec<T>> for RcSlice<T> {
     fn from(vec: Vec<T>) -> Self {
         Self::from_vec(vec)
+    }
+}
+
+impl<T> From<RcSliceMut<T>> for RcSlice<T> {
+    fn from(slice_mut: RcSliceMut<T>) -> Self {
+        RcSliceMut::into_immut(slice_mut)
     }
 }
 
