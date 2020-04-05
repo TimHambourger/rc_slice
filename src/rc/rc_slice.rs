@@ -90,6 +90,14 @@ pub struct WeakSlice<T> {
     _data_guard: Weak<DataGuard>,
 }
 
+#[derive(Debug)]
+// TODO: Tweak for DoubleEndedIterator
+pub struct RcSliceParts<T> {
+    num_parts: usize,
+    num_yielded: usize,
+    stack: Vec<RcSlice<T>>,
+}
+
 impl<T> RcSliceData<T> {
     fn from_boxed_slice(slice: Box<[T]>) -> Self {
         assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
@@ -173,12 +181,12 @@ impl<T> RcSliceData<T> {
     }
 
     fn left_sub(&self) -> (NonNull<T>, usize) {
-        (self.ptr, self.len / 2)
+        (self.ptr, self.len >> 1)
     }
 
     fn right_sub(&self) -> (NonNull<T>, usize) {
         // TODO: Support ZSTs
-        (unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len / 2) as isize)) }, self.len - self.len / 2)
+        (unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len >> 1) as isize)) }, self.len - (self.len >> 1))
     }
 
     /// Convert this RcSliceData into an RcSliceMut. Unsafe b/c calling code
@@ -291,6 +299,10 @@ impl<T> RcSlice<T> {
         right
     }
 
+    pub fn split_into_parts(this: Self, num_parts: usize) -> RcSliceParts<T> {
+        RcSliceParts::new(this, num_parts)
+    }
+
     pub fn get_mut(this: &mut Self) -> Option<&mut [T]> {
         // We need to check for any RcSlices referencing ancestor or
         // descendant RcSliceDatas, and we need to check for any RcSlices
@@ -343,8 +355,6 @@ impl<T> RcSlice<T> {
 
     // TODO: make_mut
     // TODO: into_boxed_slice, into_vec
-    // TODO: split_into_parts
-    // TODO: clone_parts
 }
 
 impl<T> Clone for RcSlice<T> {
@@ -399,3 +409,50 @@ impl<T> Clone for WeakSlice<T> {
         WeakSlice { data: self.data.clone(), _data_guard: self._data_guard.clone() }
     }
 }
+
+impl<T> RcSliceParts<T> {
+    fn new(slice: RcSlice<T>, num_parts: usize) -> Self {
+        assert_ne!(0, num_parts, "num_parts > 0");
+        let mut n = num_parts;
+        let mut cap = 0;
+        while n & 1 == 0 {
+            cap += 1;
+            n >>= 1;
+        }
+        assert_eq!(1, n, "num_parts {} is a power of 2", num_parts);
+        let mut stack = Vec::with_capacity(cap);
+        stack.push(slice);
+        RcSliceParts { num_parts, num_yielded: 0, stack }
+    }
+}
+
+impl<T> Iterator for RcSliceParts<T> {
+    type Item = RcSlice<T>;
+
+    fn next(&mut self) -> Option<RcSlice<T>> {
+        if self.num_yielded == self.num_parts {
+            None
+        } else {
+            debug_assert_ne!(0, self.stack.len(), "stack is nonempty when RcSliceParts not done iterating");
+            let initial_cap = self.stack.capacity();
+            let mut n = if self.num_yielded == 0 { self.num_parts } else { self.num_yielded };
+            let mut item: Option<RcSlice<T>> = None;
+            while n & 1 == 0 {
+                if let Some(item) = item {
+                    self.stack.push(item);
+                }
+                item = self.stack.last_mut().map(RcSlice::split_off_left);
+                n >>= 1;
+            }
+            debug_assert_eq!(initial_cap, self.stack.capacity(), "stack doesn't need to re-allocate");
+            self.num_yielded += 1;
+            item.or_else(|| self.stack.pop())
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.num_parts - self.num_yielded, Some(self.num_parts - self.num_yielded))
+    }
+}
+
+// TODO: DoubleEndedIterator

@@ -52,16 +52,16 @@ impl<T> SliceItems<T> {
     }
 
     fn left_len(&self) -> usize {
-        self.len / 2
+        self.len >> 1
     }
 
     fn right_len(&self) -> usize {
-        self.len - self.len / 2
+        self.len - (self.len >> 1)
     }
 
     fn mid(&self) -> NonNull<T> {
         // TODO: Support ZSTs
-        unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len / 2) as isize)) }
+        unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len >> 1) as isize)) }
     }
 
     // TODO: split_into_parts
