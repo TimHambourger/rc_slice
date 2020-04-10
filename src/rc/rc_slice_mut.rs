@@ -1,6 +1,9 @@
 use core::{
+    borrow::{Borrow, BorrowMut},
     convert::TryFrom,
     mem,
+    cmp::Ordering,
+    iter::FromIterator,
     ops::{Deref, DerefMut},
     ptr::NonNull,
 };
@@ -97,3 +100,8 @@ impl<T> TryFrom<RcSlice<T>> for RcSliceMut<T> {
         RcSlice::into_mut(slice)
     }
 }
+
+borrow_as_slice!(RcSliceMut);
+borrow_mut_as_slice!(RcSliceMut);
+compare_as_slice!(RcSliceMut);
+from_iter_via_vec!(RcSliceMut);

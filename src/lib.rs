@@ -4,7 +4,9 @@
 
 extern crate alloc;
 
+#[macro_use]
 mod internal;
+
 pub mod rc;
 
 // Re-export the core types...

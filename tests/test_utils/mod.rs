@@ -8,3 +8,10 @@ impl<'a> Drop for DropTracker<'a> {
         self.1.borrow_mut().push(self.0);
     }
 }
+
+// This enables nice assertions on the contents of a [DropTracker<'_>]
+impl<'a> PartialEq<DropTracker<'a>> for &str {
+    fn eq(&self, other: &DropTracker<'a>) -> bool {
+        *self == other.0
+    }
+}

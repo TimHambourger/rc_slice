@@ -69,11 +69,11 @@ impl<T> SliceItems<T> {
 
 impl<T> Drop for SliceItems<T> {
     fn drop(&mut self) {
-        // Use ptr::read to drop the items without freeing the underlying allocation.
+        // Use [T]'s drop impl to drop the items without freeing the underlying allocation.
         // SliceAlloc handles freeing the underlying allocation.
-        for i in 0..self.len {
-            unsafe { ptr::read(self.ptr.as_ptr().offset(i as isize)); }
-        }
+        // The idea of using drop_in_place was taken straight from the drop impl for Vec<T>.
+        // See https://doc.rust-lang.org/src/alloc/vec.rs.html
+        unsafe { ptr::drop_in_place(&mut **self) }
     }
 }
 

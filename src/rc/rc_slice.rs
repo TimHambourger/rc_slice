@@ -1,5 +1,8 @@
 use core::{
+    borrow::Borrow,
     cell::{Cell, RefCell},
+    cmp::Ordering,
+    iter::{FromIterator, FusedIterator},
     marker::PhantomData,
     mem,
     ops::Deref,
@@ -234,11 +237,11 @@ impl<T> Drop for RcSliceData<T> {
             },
             _ => return // Both children are present. Nothing more to do.
         };
-        // Use ptr::read to drop the items without freeing the underlying allocation.
+        // Use [T]'s drop impl to drop the items without freeing the underlying allocation.
         // SliceAlloc handles freeing the underlying allocation.
-        for i in 0..len {
-            unsafe { ptr::read(p.as_ptr().offset(i as isize)); }
-        }
+        // The idea of using drop_in_place was taken straight from the drop impl for Vec<T>.
+        // See https://doc.rust-lang.org/src/alloc/vec.rs.html
+        unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(p.as_ptr(), len)) }
     }
 }
 
@@ -396,6 +399,10 @@ impl<T> From<RcSliceMut<T>> for RcSlice<T> {
     }
 }
 
+borrow_as_slice!(RcSlice);
+compare_as_slice!(RcSlice);
+from_iter_via_vec!(RcSlice);
+
 impl<T> WeakSlice<T> {
     /// Constructs a new `WeakSlice<T>`, without allocating any memory.
     /// Calling `upgrade` on the return value always gives `None`.
@@ -439,9 +446,11 @@ impl<T> RcSliceParts<T> {
             deque,
         }
     }
+}
 
+impl<T> ExactSizeIterator for RcSliceParts<T> {
     #[inline]
-    fn num_remaining(&self) -> usize {
+    fn len(&self) -> usize {
         self.num_parts - self.num_yielded_front - self.num_yielded_back
     }
 }
@@ -527,22 +536,22 @@ impl<T> RcSliceParts<T> {
 // the number num_parts - num_yielded_front (which must be positive so long
 // as we haven't yielded all subslices yet). Then you can skip the first
 // split provided num_yielded_back > num_parts - num_yielded_front - n.
-// Or, rearranging, you can skip the first split provided n > num_remaining.
+// Or, rearranging, you can skip the first split provided n > len.
 // Set n = n / 2. Then you can skip the next split provided n is still >
-// num_remaining. Repeat until n = 1.
+// len. Repeat until n = 1.
 
 impl<T> Iterator for RcSliceParts<T> {
     type Item = RcSlice<T>;
 
     fn next(&mut self) -> Option<RcSlice<T>> {
-        if 0 == self.num_remaining() {
+        if 0 == self.len() {
             None
         } else {
             debug_assert_ne!(0, self.deque.len(), "deque is nonempty when RcSliceParts not done iterating");
             let initial_cap = self.deque.capacity();
             let mut n = greatest_power_of_2_factor(self.num_parts - self.num_yielded_front);
-            let remaining = self.num_remaining();
-            while n > remaining { n >>= 1; }
+            let len = self.len();
+            while n > len { n >>= 1; }
             let mut item: Option<RcSlice<T>> = None;
             while n & 1 == 0 {
                 if let Some(item) = item {
@@ -558,21 +567,21 @@ impl<T> Iterator for RcSliceParts<T> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.num_remaining(), Some(self.num_remaining()))
+        (self.len(), Some(self.len()))
     }
 }
 
 impl<T> DoubleEndedIterator for RcSliceParts<T> {
     fn next_back(&mut self) -> Option<RcSlice<T>> {
         // The exact mirror image next(...).
-        if 0 == self.num_remaining() {
+        if 0 == self.len() {
             None
         } else {
             debug_assert_ne!(0, self.deque.len(), "deque is nonempty when RcSliceParts not done iterating");
             let initial_cap = self.deque.capacity();
             let mut n = greatest_power_of_2_factor(self.num_parts - self.num_yielded_back);
-            let remaining = self.num_remaining();
-            while n > remaining { n >>= 1; }
+            let len = self.len();
+            while n > len { n >>= 1; }
             let mut item: Option<RcSlice<T>> = None;
             while n & 1 == 0 {
                 if let Some(item) = item {
@@ -601,4 +610,17 @@ fn greatest_power_of_2_factor(mut n: usize) -> usize {
         n >>= 1;
     }
     p
+}
+
+impl<T> FusedIterator for RcSliceParts<T> { }
+
+impl<T> Clone for RcSliceParts<T> {
+    fn clone(&self) -> Self {
+        RcSliceParts {
+            num_parts: self.num_parts,
+            num_yielded_front: self.num_yielded_front,
+            num_yielded_back: self.num_yielded_back,
+            deque: self.deque.clone(),
+        }
+    }
 }

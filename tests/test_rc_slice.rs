@@ -34,7 +34,7 @@ fn is_covariant() {
 
 #[test]
 fn drops_its_data() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -42,12 +42,12 @@ fn drops_its_data() {
     ]);
 
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
 
 #[test]
 fn drops_only_when_no_strong_refs() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
 
     {
         let slice = RcSlice::from_vec(vec![
@@ -63,12 +63,12 @@ fn drops_only_when_no_strong_refs() {
     }
 
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
 
 #[test]
 fn drops_when_subs_dropped() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
 
     {
         let mut slice = RcSlice::from_vec(vec![
@@ -81,17 +81,17 @@ fn drops_when_subs_dropped() {
         }
         // We should've dropped the 1 item from the left subslice
         dropped.borrow_mut().sort_unstable();
-        assert_eq!(&["a"], &dropped.borrow()[..]);
+        assert_eq!(["a"], dropped.borrow()[..]);
     }
 
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
 
 #[test]
 fn derefs_to_slice() {
     let slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
-    assert_eq!(&[0, 1, 2, 3], &*slice);
+    assert_eq!([0, 1, 2, 3], slice[..]);
 }
 
 #[test]
@@ -99,8 +99,8 @@ fn clone_derefs_to_subslice() {
     let slice = RcSlice::from_vec(vec![0, 1, 2, 3, 4]);
     let left = RcSlice::clone_left(&slice);
     let right = RcSlice::clone_right(&slice);
-    assert_eq!(&[0, 1], &*left);
-    assert_eq!(&[2, 3, 4], &*right);
+    assert_eq!([0, 1], left[..]);
+    assert_eq!([2, 3, 4], right[..]);
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn clone_tolerates_small_slices() {
 
 #[test]
 fn split_into_parts_basic() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -130,53 +130,29 @@ fn split_into_parts_basic() {
         DropTracker("h", &dropped),
     ]);
     let mut parts = RcSlice::split_into_parts(slice, 8);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("a", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("b", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("c", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("d", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c", "d"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("e", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c", "d", "e"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("f", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c", "d", "e", "f"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("g", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c", "d", "e", "f", "g"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("h", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c", "d", "e", "f", "g", "h"], &dropped.borrow()[..]);
+    assert_eq!(["a"], parts.next().unwrap()[..]);
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["b"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["c"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["d"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["e"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c", "d", "e"], dropped.borrow()[..]);
+    assert_eq!(["f"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f"], dropped.borrow()[..]);
+    assert_eq!(["g"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g"], dropped.borrow()[..]);
+    assert_eq!(["h"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.borrow()[..]);
     // We've now yielded the last subslice
     assert!(parts.next().is_none());
 }
 
 #[test]
 fn split_into_parts_partial_iteration() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -188,33 +164,21 @@ fn split_into_parts_partial_iteration() {
         DropTracker("h", &dropped),
     ]);
     let mut parts = RcSlice::split_into_parts(slice, 8);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("a", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("b", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("c", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
-    let part = parts.next().unwrap();
-    assert_eq!(1, part.len());
-    assert_eq!("d", part.first().unwrap().0);
-    drop(part);
-    assert_eq!(&["a", "b", "c", "d"], &dropped.borrow()[..]);
+    assert_eq!(["a"], parts.next().unwrap()[..]);
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["b"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["c"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["d"], parts.next().unwrap()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
     // End iteration early. Dropping the iterator should drop the
     // remaining items.
     drop(parts);
     // sort to avoid asserting on the order individual items within
     // the iterator are dropped.
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a", "b", "c", "d", "e", "f", "g", "h"], &dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.borrow()[..]);
 }
 
 #[test]
@@ -223,33 +187,33 @@ fn split_into_various_parts() {
 
     // Split in 1
     let mut parts = RcSlice::split_into_parts(slice.clone(), 1);
-    assert_eq!(&[0, 1, 2, 3, 4, 5], &*parts.next().unwrap());
+    assert_eq!([0, 1, 2, 3, 4, 5], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
 
     // Split in 2
     let mut parts = RcSlice::split_into_parts(slice.clone(), 2);
-    assert_eq!(&[0, 1, 2], &*parts.next().unwrap());
-    assert_eq!(&[3, 4, 5], &*parts.next().unwrap());
+    assert_eq!([0, 1, 2], parts.next().unwrap()[..]);
+    assert_eq!([3, 4, 5], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
 
     // Split in 4
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1, 2], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next().unwrap());
-    assert_eq!(&[4, 5], &*parts.next().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1, 2], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next().unwrap()[..]);
+    assert_eq!([4, 5], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
 
     // Split in 8
     let mut parts = RcSlice::split_into_parts(slice.clone(), 8);
     assert_eq!(0, parts.next().unwrap().len());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next().unwrap()[..]);
     assert_eq!(0, parts.next().unwrap().len());
-    assert_eq!(&[3], &*parts.next().unwrap());
-    assert_eq!(&[4], &*parts.next().unwrap());
-    assert_eq!(&[5], &*parts.next().unwrap());
+    assert_eq!([3], parts.next().unwrap()[..]);
+    assert_eq!([4], parts.next().unwrap()[..]);
+    assert_eq!([5], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
 }
 
@@ -264,136 +228,136 @@ fn split_into_parts_front_and_back() {
 
     // Walk #1: next, next, next, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #2: next, next, next_back, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #3: next, next, next_back, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #4: next, next_back, next, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #5: next, next_back, next, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #6: next, next_back, next_back, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #7: next, next_back, next_back, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next_back().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #8: next_back, next, next, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #9: next_back, next, next, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #10: next_back, next, next_back, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #11: next_back, next, next_back, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next_back().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #12: next_back, next_back, next, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #13: next_back, next_back, next, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next_back().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #14: next_back, next_back, next_back, next
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 
     // Walk #15: next_back, next_back, next_back, next_back
     let mut parts = RcSlice::split_into_parts(slice.clone(), 4);
-    assert_eq!(&[3], &*parts.next_back().unwrap());
-    assert_eq!(&[2], &*parts.next_back().unwrap());
-    assert_eq!(&[1], &*parts.next_back().unwrap());
-    assert_eq!(&[0], &*parts.next_back().unwrap());
+    assert_eq!([3], parts.next_back().unwrap()[..]);
+    assert_eq!([2], parts.next_back().unwrap()[..]);
+    assert_eq!([1], parts.next_back().unwrap()[..]);
+    assert_eq!([0], parts.next_back().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 }
@@ -408,38 +372,38 @@ fn split_into_parts_sample_32() {
     // about this walk vs any other. Just want a test that uses both
     // next and next_back and deals w/ a higher num_parts than our other
     // tests.
-    assert_eq!(&[0], &*parts.next().unwrap());
-    assert_eq!(&[1], &*parts.next().unwrap());
-    assert_eq!(&[2], &*parts.next().unwrap());
-    assert_eq!(&[31], &*parts.next_back().unwrap());
-    assert_eq!(&[3], &*parts.next().unwrap());
-    assert_eq!(&[30], &*parts.next_back().unwrap());
-    assert_eq!(&[4], &*parts.next().unwrap());
-    assert_eq!(&[29], &*parts.next_back().unwrap());
-    assert_eq!(&[28], &*parts.next_back().unwrap());
-    assert_eq!(&[5], &*parts.next().unwrap());
-    assert_eq!(&[6], &*parts.next().unwrap());
-    assert_eq!(&[27], &*parts.next_back().unwrap());
-    assert_eq!(&[7], &*parts.next().unwrap());
-    assert_eq!(&[26], &*parts.next_back().unwrap());
-    assert_eq!(&[8], &*parts.next().unwrap());
-    assert_eq!(&[25], &*parts.next_back().unwrap());
-    assert_eq!(&[9], &*parts.next().unwrap());
-    assert_eq!(&[24], &*parts.next_back().unwrap());
-    assert_eq!(&[23], &*parts.next_back().unwrap());
-    assert_eq!(&[10], &*parts.next().unwrap());
-    assert_eq!(&[22], &*parts.next_back().unwrap());
-    assert_eq!(&[11], &*parts.next().unwrap());
-    assert_eq!(&[12], &*parts.next().unwrap());
-    assert_eq!(&[13], &*parts.next().unwrap());
-    assert_eq!(&[21], &*parts.next_back().unwrap());
-    assert_eq!(&[14], &*parts.next().unwrap());
-    assert_eq!(&[20], &*parts.next_back().unwrap());
-    assert_eq!(&[15], &*parts.next().unwrap());
-    assert_eq!(&[16], &*parts.next().unwrap());
-    assert_eq!(&[17], &*parts.next().unwrap());
-    assert_eq!(&[19], &*parts.next_back().unwrap());
-    assert_eq!(&[18], &*parts.next().unwrap());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([1], parts.next().unwrap()[..]);
+    assert_eq!([2], parts.next().unwrap()[..]);
+    assert_eq!([31], parts.next_back().unwrap()[..]);
+    assert_eq!([3], parts.next().unwrap()[..]);
+    assert_eq!([30], parts.next_back().unwrap()[..]);
+    assert_eq!([4], parts.next().unwrap()[..]);
+    assert_eq!([29], parts.next_back().unwrap()[..]);
+    assert_eq!([28], parts.next_back().unwrap()[..]);
+    assert_eq!([5], parts.next().unwrap()[..]);
+    assert_eq!([6], parts.next().unwrap()[..]);
+    assert_eq!([27], parts.next_back().unwrap()[..]);
+    assert_eq!([7], parts.next().unwrap()[..]);
+    assert_eq!([26], parts.next_back().unwrap()[..]);
+    assert_eq!([8], parts.next().unwrap()[..]);
+    assert_eq!([25], parts.next_back().unwrap()[..]);
+    assert_eq!([9], parts.next().unwrap()[..]);
+    assert_eq!([24], parts.next_back().unwrap()[..]);
+    assert_eq!([23], parts.next_back().unwrap()[..]);
+    assert_eq!([10], parts.next().unwrap()[..]);
+    assert_eq!([22], parts.next_back().unwrap()[..]);
+    assert_eq!([11], parts.next().unwrap()[..]);
+    assert_eq!([12], parts.next().unwrap()[..]);
+    assert_eq!([13], parts.next().unwrap()[..]);
+    assert_eq!([21], parts.next_back().unwrap()[..]);
+    assert_eq!([14], parts.next().unwrap()[..]);
+    assert_eq!([20], parts.next_back().unwrap()[..]);
+    assert_eq!([15], parts.next().unwrap()[..]);
+    assert_eq!([16], parts.next().unwrap()[..]);
+    assert_eq!([17], parts.next().unwrap()[..]);
+    assert_eq!([19], parts.next_back().unwrap()[..]);
+    assert_eq!([18], parts.next().unwrap()[..]);
     assert!(parts.next().is_none());
     assert!(parts.next_back().is_none());
 }
@@ -459,10 +423,35 @@ fn split_into_zero_parts() {
 }
 
 #[test]
+fn clone_rc_slice_parts() {
+    let dropped = RefCell::new(Vec::new());
+    let slice = RcSlice::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+    ]);
+    let mut parts = RcSlice::split_into_parts(slice, 2);
+    assert_eq!(["a"], parts.next().unwrap()[..]);
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(1, parts.len());
+
+    let mut clone = parts.clone();
+    // Cloned iterator matches iteration state of original iterator.
+    assert_eq!(1, clone.len());
+    assert_eq!(["b", "c"], parts.next().unwrap()[..]);
+    // We haven't dropped the righthand items yet since we cloned the iterator.
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["b", "c"], clone.next().unwrap()[..]);
+    // Now we've dropped
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+}
+
+#[test]
 fn get_mut_allows_mutation() {
     let mut slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
-    (*RcSlice::get_mut(&mut slice).unwrap())[0] = 4;
-    assert_eq!(&[4, 1, 2, 3], &*slice);
+    RcSlice::get_mut(&mut slice).unwrap()[0] = 4;
+    assert_eq!([4, 1, 2, 3], slice[..]);
 }
 
 #[test]
@@ -494,15 +483,36 @@ fn get_mut_handles_gaps_in_hierarchy() {
 }
 
 #[test]
+fn eq_compares_as_slice() {
+    let mut slice = RcSlice::from_vec(vec![0, 1, 2, 3, 0, 1, 2, 3]);
+    let left = RcSlice::split_off_left(&mut slice);
+    assert_eq!(left, slice);
+}
+
+#[test]
+fn ord_compares_as_slice() {
+    let mut slice = RcSlice::from_vec(vec![0, 2, 1, 1]);
+    let left = RcSlice::split_off_left(&mut slice);
+    assert!(left < slice);
+}
+
+#[test]
+fn can_collect() {
+    let a = [0, 1, 2, 3, 4];
+    let slice: RcSlice<_> = a.iter().copied().collect();
+    assert_eq!(a, slice[..]);
+}
+
+#[test]
 fn downgrade_then_upgrade() {
     let slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
     let weak_slice = RcSlice::downgrade(&slice);
-    assert_eq!(&[0, 1, 2, 3], &*weak_slice.upgrade().unwrap());
+    assert_eq!([0, 1, 2, 3], weak_slice.upgrade().unwrap()[..]);
 }
 
 #[test]
 fn downgrade_lets_slice_get_dropped() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -513,13 +523,13 @@ fn downgrade_lets_slice_get_dropped() {
     drop(slice);
 
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
     assert!(weak_slice.upgrade().is_none());
 }
 
 #[test]
 fn downgrade_child_then_upgrade() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     let parent = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -538,7 +548,7 @@ fn downgrade_child_then_upgrade() {
 
 #[test]
 fn downgrade_parent_then_upgrade() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     let parent = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -551,7 +561,7 @@ fn downgrade_parent_then_upgrade() {
 
     // Dropped left half b/c we dropped the parent
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a"], &dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.borrow()[..]);
     // And weak_parent is no longer upgradeable, b/c to upgrade we need
     // to be able to recover the WHOLE subslice.
     assert!(weak_parent.upgrade().is_none());
@@ -572,7 +582,7 @@ fn downgrade_then_upgrade_with_gaps() {
     // Fact that grandparent is still alive is enough that weak_child should
     // be upgradeable.
     let child = weak_child.upgrade().unwrap();
-    assert_eq!(&[3], &*child);
+    assert_eq!([3], child[..]);
     // And we should know that presence of child means grandparent isn't
     // mutable.
     assert!(RcSlice::get_mut(&mut grandparent).is_none());
@@ -585,8 +595,8 @@ fn downgrade_then_upgrade_with_gaps() {
 fn into_mut_allows_mutation() {
     let slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
     let mut slice = RcSlice::into_mut(slice).unwrap();
-    (*slice)[0] = 4;
-    assert_eq!(&[4, 1, 2, 3], &*slice);
+    slice[0] = 4;
+    assert_eq!([4, 1, 2, 3], slice[..]);
 }
 
 #[test]
@@ -594,16 +604,16 @@ fn into_mut_prevents_unsafe_mutation() {
     let mut slice1 = RcSlice::from_vec(vec![0, 1, 2, 3]);
     let slice2 = RcSlice::split_off_right(&mut slice1);
     let slice3 = RcSlice::clone_right(&slice2);
-    assert_eq!(&[0, 1], &*RcSlice::into_mut(slice1).unwrap());
+    assert_eq!([0, 1], RcSlice::into_mut(slice1).unwrap()[..]);
     // Can't convert slice2 into mutable b/c its child slice3 is still alive.
     let slice2 = RcSlice::into_mut(slice2).unwrap_err();
-    assert_eq!(&[2, 3], &*slice2);
+    assert_eq!([2, 3], slice2[..]);
     // Likewise can't convert slice3 into mutable
     let slice3 = RcSlice::into_mut(slice3).unwrap_err();
-    assert_eq!(&[3], &*slice3);
+    assert_eq!([3], slice3[..]);
     drop(slice2);
     // But now can convert slice3
-    assert_eq!(&[3], &*RcSlice::into_mut(slice3).unwrap());
+    assert_eq!([3], RcSlice::into_mut(slice3).unwrap()[..]);
 }
 
 #[test]
@@ -612,14 +622,14 @@ fn into_mut_tolerates_weak_slices() {
     let weak_slice = RcSlice::downgrade(&slice);
     // Conversion into mutable is allowed
     let slice = RcSlice::into_mut(slice).unwrap();
-    assert_eq!(&[0, 1, 2, 3, 4], &*slice);
+    assert_eq!([0, 1, 2, 3, 4], slice[..]);
     // And weak_slice is no longer upgradeable
     assert!(weak_slice.upgrade().is_none());
 }
 
 #[test]
 fn into_mut_doesnt_drop() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = RefCell::new(Vec::new());
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -636,5 +646,5 @@ fn into_mut_doesnt_drop() {
     drop(slice_mut);
     // Now items are dropped
     dropped.borrow_mut().sort_unstable();
-    assert_eq!(&["a", "b", "c"], &dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
