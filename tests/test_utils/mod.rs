@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct DropTracker<'a>(pub &'static str, pub &'a RefCell<Vec<&'static str>>);
 
 impl<'a> Drop for DropTracker<'a> {

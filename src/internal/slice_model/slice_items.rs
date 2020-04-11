@@ -1,4 +1,5 @@
 use core::{
+    iter::FusedIterator,
     marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
@@ -12,6 +13,13 @@ use core::{
 pub struct SliceItems<T> {
     ptr: NonNull<T>,
     len: usize,
+    phantom: PhantomData<T>,
+}
+
+#[derive(Debug)]
+pub struct IntoIter<T> {
+    start: NonNull<T>,
+    end: NonNull<T>,
     phantom: PhantomData<T>,
 }
 
@@ -88,5 +96,73 @@ impl<T> Deref for SliceItems<T> {
 impl<T> DerefMut for SliceItems<T> {
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl<T> IntoIterator for SliceItems<T> {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
+
+    #[inline]
+    fn into_iter(self) -> IntoIter<T> { IntoIter::new(self) }
+}
+
+impl<T> IntoIter<T> {
+    fn new(slice_items: SliceItems<T>) -> Self {
+        // TODO: support ZSTs
+        let start = slice_items.ptr;
+        let end = unsafe { NonNull::new_unchecked(start.as_ptr().offset(slice_items.len as isize)) };
+        mem::forget(slice_items);
+        IntoIter { start, end, phantom: PhantomData }
+    }
+}
+
+impl<T> ExactSizeIterator for IntoIter<T> {
+    #[inline]
+    fn len(&self) -> usize {
+        // TODO: support ZSTs
+        (self.end.as_ptr() as usize - self.start.as_ptr() as usize) / mem::size_of::<T>()
+    }
+}
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        if self.len() > 0 {
+            unsafe {
+                let read = ptr::read(self.start.as_ptr());
+                self.start = NonNull::new_unchecked(self.start.as_ptr().offset(1));
+                Some(read)
+            }
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.len()))
+    }
+}
+
+impl<T> DoubleEndedIterator for IntoIter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        if self.len() > 0 {
+            unsafe {
+                self.end = NonNull::new_unchecked(self.end.as_ptr().offset(-1));
+                Some(ptr::read(self.end.as_ptr()))
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> FusedIterator for IntoIter<T> { }
+
+impl<T> Drop for IntoIter<T> {
+    fn drop(&mut self) {
+        // As for SliceItems, use [T]'s drop impl
+        unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(self.start.as_ptr(), self.len())) }
     }
 }

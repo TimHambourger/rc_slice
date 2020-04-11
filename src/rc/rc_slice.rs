@@ -2,6 +2,7 @@ use core::{
     borrow::Borrow,
     cell::{Cell, RefCell},
     cmp::Ordering,
+    hash::{Hash, Hasher},
     iter::{FromIterator, FusedIterator},
     marker::PhantomData,
     mem,
@@ -401,6 +402,7 @@ impl<T> From<RcSliceMut<T>> for RcSlice<T> {
 
 borrow_as_slice!(RcSlice);
 compare_as_slice!(RcSlice);
+hash_as_slice!(RcSlice);
 from_iter_via_vec!(RcSlice);
 
 impl<T> WeakSlice<T> {

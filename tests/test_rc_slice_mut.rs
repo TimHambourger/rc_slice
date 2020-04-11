@@ -2,7 +2,10 @@ extern crate rc_slice;
 
 mod test_utils;
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    collections::hash_map::HashMap,
+};
 
 use rc_slice::RcSliceMut;
 use test_utils::DropTracker;
@@ -108,8 +111,113 @@ fn ord_compares_as_slice() {
 }
 
 #[test]
+fn hash_hashes_as_slice() {
+    let mut map = HashMap::new();
+    let mut slice = RcSliceMut::from_vec(vec![0, 2, 1, 5, 0, 2, 1, 5]);
+    let left = RcSliceMut::split_off_left(&mut slice);
+    map.insert(slice, String::from("the slice"));
+    assert_eq!("the slice", map.get(&left).unwrap());
+    assert_eq!("the slice", map.get(&[0, 2, 1, 5] as &[_]).unwrap());
+    assert!(map.get(&[0, 2, 1] as &[_]).is_none());
+}
+
+#[test]
 fn can_collect() {
     let a = [0, 1, 2, 3, 4];
     let slice: RcSliceMut<_> = a.iter().copied().collect();
     assert_eq!(a, slice[..]);
+}
+
+#[test]
+fn can_clone() {
+    let dropped = RefCell::new(Vec::new());
+    let original = RcSliceMut::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+    ]);
+    let mut clone = original.clone();
+    clone[0] = DropTracker("d", &dropped);
+    // We dropped the "a" DropTracker from swapping out the clone's first item
+    assert_eq!(["a"], dropped.borrow()[..]);
+    // Clone is updated
+    assert_eq!(["d", "b", "c"], clone[..]);
+    // Original is unaffected
+    assert_eq!(["a", "b", "c"], original[..]);
+    dropped.borrow_mut().clear();
+    drop(original);
+    dropped.borrow_mut().sort_unstable();
+    // Dropped the original's items
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    dropped.borrow_mut().clear();
+    drop(clone);
+    // And dropped the clone's items
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(["b", "c", "d"], dropped.borrow()[..]);
+}
+
+#[test]
+fn into_iter_basic() {
+    let dropped = RefCell::new(Vec::new());
+    let slice = RcSliceMut::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+        DropTracker("d", &dropped),
+    ]);
+    let mut iter = slice.into_iter();
+    // Just calling into_iter doesn't drop anything
+    assert_eq!(0, dropped.borrow().len());
+    assert_eq!("a", iter.next().unwrap());
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!("b", iter.next().unwrap());
+    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!("c", iter.next().unwrap());
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!("d", iter.next().unwrap());
+    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert!(iter.next().is_none());
+}
+
+#[test]
+fn into_iter_partial_iteration() {
+    let dropped = RefCell::new(Vec::new());
+    let slice = RcSliceMut::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+        DropTracker("d", &dropped),
+    ]);
+    let mut iter = slice.into_iter();
+    assert_eq!("a", iter.next().unwrap());
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!("b", iter.next().unwrap());
+    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(2, iter.len());
+    drop(iter);
+    // Dropping the iterator drops the rest of the items
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+}
+
+#[test]
+fn into_iter_double_ended() {
+    let dropped = RefCell::new(Vec::new());
+    let slice = RcSliceMut::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+        DropTracker("d", &dropped),
+    ]);
+    let mut iter = slice.into_iter();
+    assert_eq!("a", iter.next().unwrap());
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!("d", iter.next_back().unwrap());
+    assert_eq!(["a", "d"], dropped.borrow()[..]);
+    assert_eq!("b", iter.next().unwrap());
+    assert_eq!(["a", "d", "b"], dropped.borrow()[..]);
+    assert_eq!("c", iter.next_back().unwrap());
+    assert_eq!(["a", "d", "b", "c"], dropped.borrow()[..]);
+    assert!(iter.next().is_none());
+    assert!(iter.next_back().is_none());
 }

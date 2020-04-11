@@ -2,7 +2,10 @@ extern crate rc_slice;
 
 mod test_utils;
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    collections::hash_map::HashMap,
+};
 
 use rc_slice::RcSlice;
 use test_utils::DropTracker;
@@ -494,6 +497,17 @@ fn ord_compares_as_slice() {
     let mut slice = RcSlice::from_vec(vec![0, 2, 1, 1]);
     let left = RcSlice::split_off_left(&mut slice);
     assert!(left < slice);
+}
+
+#[test]
+fn hash_hashes_as_slice() {
+    let mut map = HashMap::new();
+    let mut slice = RcSlice::from_vec(vec![0, 2, 1, 5, 0, 2, 1, 5]);
+    let left = RcSlice::split_off_left(&mut slice);
+    map.insert(slice, String::from("the slice"));
+    assert_eq!("the slice", map.get(&left).unwrap());
+    assert_eq!("the slice", map.get(&[0, 2, 1, 5] as &[_]).unwrap());
+    assert!(map.get(&[0, 2, 1] as &[_]).is_none());
 }
 
 #[test]

@@ -1,9 +1,10 @@
 use core::{
     borrow::{Borrow, BorrowMut},
     convert::TryFrom,
+    hash::{Hash, Hasher},
     mem,
     cmp::Ordering,
-    iter::FromIterator,
+    iter::{FromIterator, FusedIterator},
     ops::{Deref, DerefMut},
     ptr::NonNull,
 };
@@ -14,7 +15,7 @@ use alloc::{
 };
 
 use crate::{
-    internal::slice_model::{SliceAlloc, SliceItems},
+    internal::slice_model::{SliceAlloc, SliceItems, IntoIter as SliceItemsIter},
     rc::rc_slice::{RcSlice, RcSliceData},
 };
 
@@ -24,6 +25,12 @@ pub struct RcSliceMut<T> {
     items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
     // don't need an underlying allocation.
+    alloc: Option<Rc<SliceAlloc<T>>>,
+}
+
+#[derive(Debug)]
+pub struct IntoIter<T> {
+    iter: SliceItemsIter<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
 
@@ -101,7 +108,56 @@ impl<T> TryFrom<RcSlice<T>> for RcSliceMut<T> {
     }
 }
 
+impl<T: Clone> Clone for RcSliceMut<T> {
+    /// Clone an `RcSliceMut` by allocating a new vector and cloning items
+    /// into it. Unlike the `clone` impl for `RcSlice`, this does NOT add
+    /// a reference to the original underlying slice but instead constructs
+    /// a new slice.
+    fn clone(&self) -> Self {
+        self.iter().cloned().collect()
+    }
+}
+
+impl<T> IntoIterator for RcSliceMut<T> {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
+
+    #[inline]
+    fn into_iter(self) -> IntoIter<T> {
+        let RcSliceMut { items, alloc } = self;
+        IntoIter { iter: items.into_iter(), alloc }
+    }
+}
+
 borrow_as_slice!(RcSliceMut);
 borrow_mut_as_slice!(RcSliceMut);
 compare_as_slice!(RcSliceMut);
+hash_as_slice!(RcSliceMut);
 from_iter_via_vec!(RcSliceMut);
+
+impl<T> ExactSizeIterator for IntoIter<T> {
+    #[inline]
+    fn len(&self) -> usize { self.iter.len() }
+}
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        let item = self.iter.next();
+        // Don't need to hold onto SliceAlloc if length is going to zero
+        if self.len() == 0 { self.alloc.take(); }
+        item
+    }
+}
+
+impl<T> DoubleEndedIterator for IntoIter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        let item = self.iter.next_back();
+        // Don't need to hold onto SliceAlloc if length is going to zero
+        if self.len() == 0 { self.alloc.take(); }
+        item
+    }
+}
+
+impl<T> FusedIterator for IntoIter<T> { }
