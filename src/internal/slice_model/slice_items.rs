@@ -17,7 +17,7 @@ pub struct SliceItems<T> {
 }
 
 #[derive(Debug)]
-pub struct IntoIter<T> {
+pub struct SliceItemsIter<T> {
     start: NonNull<T>,
     end: NonNull<T>,
     phantom: PhantomData<T>,
@@ -101,23 +101,47 @@ impl<T> DerefMut for SliceItems<T> {
 
 impl<T> IntoIterator for SliceItems<T> {
     type Item = T;
-    type IntoIter = IntoIter<T>;
+    type IntoIter = SliceItemsIter<T>;
 
     #[inline]
-    fn into_iter(self) -> IntoIter<T> { IntoIter::new(self) }
+    fn into_iter(self) -> SliceItemsIter<T> { SliceItemsIter::new(self) }
 }
 
-impl<T> IntoIter<T> {
+impl<T> SliceItemsIter<T> {
     fn new(slice_items: SliceItems<T>) -> Self {
         // TODO: support ZSTs
         let start = slice_items.ptr;
         let end = unsafe { NonNull::new_unchecked(start.as_ptr().offset(slice_items.len as isize)) };
         mem::forget(slice_items);
-        IntoIter { start, end, phantom: PhantomData }
+        SliceItemsIter { start, end, phantom: PhantomData }
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        unsafe { slice::from_raw_parts(self.start.as_ptr(), self.len()) }
+    }
+
+    pub fn as_slice_mut(&mut self) -> &mut [T] {
+        unsafe { slice::from_raw_parts_mut(self.start.as_ptr(), self.len()) }
+    }
+
+    pub fn split_off_from(&mut self, at: usize) -> Self {
+        assert!(at <= self.len(), "{} <= {}", at, self.len());
+        let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
+        let split = SliceItemsIter { start: split_pt, end: self.end, phantom: PhantomData };
+        self.end = split_pt;
+        split
+    }
+
+    pub fn split_off_to(&mut self, at: usize) -> Self {
+        assert!(at <= self.len(), "{} <= {}", at, self.len());
+        let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
+        let split = SliceItemsIter { start: self.start, end: split_pt, phantom: PhantomData };
+        self.start = split_pt;
+        split
     }
 }
 
-impl<T> ExactSizeIterator for IntoIter<T> {
+impl<T> ExactSizeIterator for SliceItemsIter<T> {
     #[inline]
     fn len(&self) -> usize {
         // TODO: support ZSTs
@@ -125,7 +149,7 @@ impl<T> ExactSizeIterator for IntoIter<T> {
     }
 }
 
-impl<T> Iterator for IntoIter<T> {
+impl<T> Iterator for SliceItemsIter<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -145,7 +169,7 @@ impl<T> Iterator for IntoIter<T> {
     }
 }
 
-impl<T> DoubleEndedIterator for IntoIter<T> {
+impl<T> DoubleEndedIterator for SliceItemsIter<T> {
     fn next_back(&mut self) -> Option<T> {
         if self.len() > 0 {
             unsafe {
@@ -158,9 +182,9 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
     }
 }
 
-impl<T> FusedIterator for IntoIter<T> { }
+impl<T> FusedIterator for SliceItemsIter<T> { }
 
-impl<T> Drop for IntoIter<T> {
+impl<T> Drop for SliceItemsIter<T> {
     fn drop(&mut self) {
         // As for SliceItems, use [T]'s drop impl
         unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(self.start.as_ptr(), self.len())) }

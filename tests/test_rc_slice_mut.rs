@@ -221,3 +221,102 @@ fn into_iter_double_ended() {
     assert!(iter.next().is_none());
     assert!(iter.next_back().is_none());
 }
+
+#[test]
+fn rc_slice_mut_iter_as_slice() {
+    let slice = RcSliceMut::from_vec(vec![10, 20, 30, 40, 50]);
+    let mut iter = slice.into_iter();
+    assert_eq!([10, 20, 30, 40, 50], iter.as_slice());
+    iter.next();
+    assert_eq!([20, 30, 40, 50], iter.as_slice());
+    iter.next_back();
+    assert_eq!([20, 30, 40], iter.as_slice());
+}
+
+#[test]
+fn rc_slice_mut_iter_as_slice_mut() {
+    let slice = RcSliceMut::from_vec(vec![10, 20, 30, 40, 50]);
+    let mut iter = slice.into_iter();
+    iter.as_slice_mut()[0] = 60;
+    assert_eq!([60, 20, 30, 40, 50], iter.as_slice());
+    assert_eq!(60, iter.next().unwrap());
+    iter.as_slice_mut()[3] = 70;
+    assert_eq!([20, 30, 40, 70], iter.as_slice());
+    assert_eq!(70, iter.next_back().unwrap());
+    iter.as_slice_mut()[1] = 80;
+    assert_eq!([20, 80, 40], iter.as_slice());
+    assert_eq!(20, iter.next().unwrap());
+    assert_eq!(80, iter.next().unwrap());
+}
+
+#[test]
+fn rc_slice_mut_iter_split_off_from() {
+    let dropped = RefCell::new(Vec::new());
+    let slice = RcSliceMut::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+        DropTracker("d", &dropped),
+    ]);
+    let mut iter = slice.into_iter();
+    // Test a trivial split first: split off last 0 items
+    let mut split = iter.split_off_from(4);
+    assert_eq!(0, split.len());
+    assert!(split.next().is_none());
+    // Split off last item
+    let mut split = iter.split_off_from(3);
+    assert_eq!(1, split.len());
+    assert_eq!(0, dropped.borrow().len());
+    assert_eq!("d", split.next().unwrap());
+    assert_eq!(["d"], dropped.borrow()[..]);
+    assert!(split.next().is_none());
+    // Assert current contents of iterator
+    assert_eq!(["a", "b", "c"], iter.as_slice());
+    assert_eq!("c", iter.next_back().unwrap());
+    assert_eq!(["d", "c"], dropped.borrow()[..]);
+    // Split off last 2 items, i.e. whole remaining iterator
+    let mut split = iter.split_off_from(0);
+    assert_eq!(0, iter.len());
+    assert!(iter.next().is_none());
+    assert_eq!(["a", "b"], split.as_slice());
+    assert_eq!("b", split.next_back().unwrap());
+    assert_eq!(["d", "c", "b"], dropped.borrow()[..]);
+    assert_eq!("a", split.next_back().unwrap());
+    assert_eq!(["d", "c", "b", "a"], dropped.borrow()[..]);
+}
+
+#[test]
+fn rc_slice_mut_iter_split_off_to() {
+    let dropped = RefCell::new(Vec::new());
+    let slice = RcSliceMut::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+        DropTracker("d", &dropped),
+    ]);
+    let mut iter = slice.into_iter();
+    // Test a trivial split first: split off first 0 items
+    let mut split = iter.split_off_to(0);
+    assert_eq!(0, split.len());
+    assert!(split.next().is_none());
+    // Split off first item
+    let mut split = iter.split_off_to(1);
+    assert_eq!(1, split.len());
+    assert_eq!(0, dropped.borrow().len());
+    assert_eq!("a", split.next().unwrap());
+    assert_eq!(["a"], dropped.borrow()[..]);
+    assert!(split.next().is_none());
+    // Assert current contents of iterator
+    assert_eq!(["b", "c", "d"], iter.as_slice());
+    assert_eq!("b", iter.next().unwrap());
+    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    // Split off first 2 items, i.e. whole remaining iterator
+    let mut split = iter.split_off_to(2);
+    assert_eq!(0, iter.len());
+    assert!(iter.next().is_none());
+    assert_eq!(["c", "d"], split.as_slice());
+    assert_eq!("c", split.next().unwrap());
+    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!("d", split.next().unwrap());
+    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+}

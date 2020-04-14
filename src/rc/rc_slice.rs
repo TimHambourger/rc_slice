@@ -361,6 +361,7 @@ impl<T> RcSlice<T> {
         WeakSlice { data: Rc::downgrade(&this.data), _data_guard: Rc::downgrade(&this.data_guard) }
     }
 
+    // TODO: unsplit
     // TODO: make_mut
     // TODO: into_boxed_slice, into_vec
 }
@@ -413,6 +414,25 @@ impl<T> WeakSlice<T> {
     }
 
     pub fn upgrade(&self) -> Option<RcSlice<T>> {
+        // TODO: This upgrade strategy has a few limitations we might wanna relax:
+        // For one, to upgrade a WeakSlice, you need there to be a strong ref to the
+        // referenced slice or some ancestor of it. E.g., it'd be cool if the
+        // following worked, but currently it won't:
+        //
+        //  let slice = RcSlice::from_vec(some_vec);
+        //  let left = RcSlice::clone_left(&slice);
+        //  let right = RcSlice::clone_right(&slice);
+        //  let weak = RcSlice::downgrade(&slice);
+        //  drop(slice); // Drop the original RcSlice
+        //  let upgraded = weak.upgrade(); // Will be None, unfortunately
+        //
+        // In the last line, it feels like we SHOULD be able to upgrade `weak`
+        // since `left` and `right` together keep alive the full original slice,
+        // albeit as two RcSlices instead of one. But currently that won't work.
+        //
+        // Similarly, once we implement RcSlice::unsplit, we won't be able
+        // to upgrade `weak` even if we were to join `left` and `right` back
+        // into a single RcSlice spanning the entire original slice.
         self.data.upgrade().map(RcSlice::from_data)
     }
 }

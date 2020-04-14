@@ -15,7 +15,7 @@ use alloc::{
 };
 
 use crate::{
-    internal::slice_model::{SliceAlloc, SliceItems, IntoIter as SliceItemsIter},
+    internal::slice_model::{SliceAlloc, SliceItems, SliceItemsIter},
     rc::rc_slice::{RcSlice, RcSliceData},
 };
 
@@ -29,7 +29,7 @@ pub struct RcSliceMut<T> {
 }
 
 #[derive(Debug)]
-pub struct IntoIter<T> {
+pub struct RcSliceMutIter<T> {
     iter: SliceItemsIter<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
@@ -54,6 +54,24 @@ impl<T> RcSliceMut<T> {
         RcSliceMut { items: SliceItems::new(ptr, len), alloc }
     }
 
+    // NOTE: We limit our splitting API to just split_off_left and split_off_right
+    // instead of arbitrary split points for maximum convertability btwn RcSliceMut
+    // and RcSlice. If RcSliceMut allowed arbitrary split points, we could introduce
+    // unsoundness via a series of calls like
+    //   - Split an RcSliceMut at a point other than the midpoint.
+    //   - Convert each resulting sub-RcSliceMut into an RcSlice via
+    //     RcSliceMut::into_immut.
+    //   - Clone each resulting RcSlice.
+    //   - Join the cloned RcSlices via RcSlice::unsplit (not yet implemented).
+    //   - Split the joined RcSlice via RcSlice::split_off_left.
+    // Now you've got RcSlices that overlap each other w/o one being a child of
+    // the other, which our RcSlice internals don't currently support.
+    // Of course, there are other API restrictions we could make to fix the above
+    // (e.g. restrict RcSlice::unsplit to slices that could have resulted from a
+    // split at a midpoint). But restricting RcSliceMut to splits at midpoints
+    // seems like the most intuitive option so long as RcSlice has the same
+    // restriction.
+
     pub fn split_off_left(this: &mut Self) -> Self {
         let new_items = this.items.split_off_left();
         RcSliceMut { items: new_items, alloc: this.alloc.clone() }
@@ -72,6 +90,7 @@ impl<T> RcSliceMut<T> {
     }
 
     // TODO: split_into_parts
+    // TODO: unsplit
 }
 
 impl<T> Deref for RcSliceMut<T> {
@@ -120,12 +139,12 @@ impl<T: Clone> Clone for RcSliceMut<T> {
 
 impl<T> IntoIterator for RcSliceMut<T> {
     type Item = T;
-    type IntoIter = IntoIter<T>;
+    type IntoIter = RcSliceMutIter<T>;
 
     #[inline]
-    fn into_iter(self) -> IntoIter<T> {
+    fn into_iter(self) -> RcSliceMutIter<T> {
         let RcSliceMut { items, alloc } = self;
-        IntoIter { iter: items.into_iter(), alloc }
+        RcSliceMutIter { iter: items.into_iter(), alloc }
     }
 }
 
@@ -135,12 +154,52 @@ compare_as_slice!(RcSliceMut);
 hash_as_slice!(RcSliceMut);
 from_iter_via_vec!(RcSliceMut);
 
-impl<T> ExactSizeIterator for IntoIter<T> {
+impl<T> RcSliceMutIter<T> {
+    pub fn as_slice(&self) -> &[T] {
+        self.iter.as_slice()
+    }
+
+    pub fn as_slice_mut(&mut self) -> &mut [T] {
+        self.iter.as_slice_mut()
+    }
+
+    // NOTE: Unlike RcSliceMut, we DO support splits at arbitrary points for
+    // RcSliceMutIter. That's b/c we have no plans for allowing conversions from
+    // an RcSliceMutIter back to an RcSliceMut or RcSlice. Since you can remove
+    // items from an RcSliceMutIter one at a time, such conversions would already
+    // be unsound for the reasons given above.
+
+    pub fn split_off_from(&mut self, at: usize) -> Self {
+        let split_iter = self.iter.split_off_from(at);
+        let alloc = if self.len() == 0 {
+            self.alloc.take()
+        } else if split_iter.len() > 0 {
+            self.alloc.clone()
+        } else {
+            None
+        };
+        RcSliceMutIter { iter: split_iter, alloc }
+    }
+
+    pub fn split_off_to(&mut self, at: usize) -> Self {
+        let split_iter = self.iter.split_off_to(at);
+        let alloc = if self.len() == 0 {
+            self.alloc.take()
+        } else if split_iter.len() > 0 {
+            self.alloc.clone()
+        } else {
+            None
+        };
+        RcSliceMutIter { iter: split_iter, alloc }
+    }
+}
+
+impl<T> ExactSizeIterator for RcSliceMutIter<T> {
     #[inline]
     fn len(&self) -> usize { self.iter.len() }
 }
 
-impl<T> Iterator for IntoIter<T> {
+impl<T> Iterator for RcSliceMutIter<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -151,7 +210,7 @@ impl<T> Iterator for IntoIter<T> {
     }
 }
 
-impl<T> DoubleEndedIterator for IntoIter<T> {
+impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
     fn next_back(&mut self) -> Option<T> {
         let item = self.iter.next_back();
         // Don't need to hold onto SliceAlloc if length is going to zero
@@ -160,4 +219,4 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
     }
 }
 
-impl<T> FusedIterator for IntoIter<T> { }
+impl<T> FusedIterator for RcSliceMutIter<T> { }
