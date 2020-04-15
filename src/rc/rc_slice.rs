@@ -242,7 +242,7 @@ impl<T> Drop for RcSliceData<T> {
         // SliceAlloc handles freeing the underlying allocation.
         // The idea of using drop_in_place was taken straight from the drop impl for Vec<T>.
         // See https://doc.rust-lang.org/src/alloc/vec.rs.html
-        unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(p.as_ptr(), len)) }
+        unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(p.as_ptr(), len)); }
     }
 }
 
@@ -468,6 +468,23 @@ impl<T> RcSliceParts<T> {
             deque,
         }
     }
+
+    /// Reference the remaining items in the iterator as a single slice.
+    pub fn as_slice(&self) -> &[T] {
+        if 0 == self.len() {
+            unsafe { slice::from_raw_parts(NonNull::dangling().as_ptr(), 0) }
+        } else {
+            // TODO: Support ZSTs
+            let start = self.deque.front()
+                .map(|slice| slice.as_ptr())
+                .expect("deque is nonempty when RcSliceParts not done iterating");
+            let end = self.deque.back()
+                .map(|slice| unsafe { slice.as_ptr().offset(slice.len() as isize) })
+                .expect("deque is nonempty when RcSliceParts not done iterating");
+            let len = (end as usize - start as usize) / mem::size_of::<T>();
+            unsafe { slice::from_raw_parts(start, len) }
+        }
+    }
 }
 
 impl<T> ExactSizeIterator for RcSliceParts<T> {
@@ -588,14 +605,12 @@ impl<T> Iterator for RcSliceParts<T> {
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len(), Some(self.len()))
-    }
+    exact_size_hint!();
 }
 
 impl<T> DoubleEndedIterator for RcSliceParts<T> {
     fn next_back(&mut self) -> Option<RcSlice<T>> {
-        // The exact mirror image next(...).
+        // The exact mirror image of next(...).
         if 0 == self.len() {
             None
         } else {

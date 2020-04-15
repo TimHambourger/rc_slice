@@ -15,7 +15,12 @@ use alloc::{
 };
 
 use crate::{
-    internal::slice_model::{SliceAlloc, SliceItems, SliceItemsIter},
+    internal::slice_model::{
+        SliceAlloc,
+        SliceItems,
+        SliceItemsIter,
+        SliceItemsParts,
+    },
     rc::rc_slice::{RcSlice, RcSliceData},
 };
 
@@ -31,6 +36,12 @@ pub struct RcSliceMut<T> {
 #[derive(Debug)]
 pub struct RcSliceMutIter<T> {
     iter: SliceItemsIter<T>,
+    alloc: Option<Rc<SliceAlloc<T>>>,
+}
+
+#[derive(Debug)]
+pub struct RcSliceMutParts<T> {
+    iter: SliceItemsParts<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
 
@@ -74,12 +85,20 @@ impl<T> RcSliceMut<T> {
 
     pub fn split_off_left(this: &mut Self) -> Self {
         let new_items = this.items.split_off_left();
-        RcSliceMut { items: new_items, alloc: this.alloc.clone() }
+        let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
+        RcSliceMut { items: new_items, alloc }
     }
 
     pub fn split_off_right(this: &mut Self) -> Self {
         let new_items = this.items.split_off_right();
-        RcSliceMut { items: new_items, alloc: this.alloc.clone() }
+        let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
+        RcSliceMut { items: new_items, alloc }
+    }
+
+    pub fn split_into_parts(this: Self, num_parts: usize) -> RcSliceMutParts<T> {
+        let RcSliceMut { items, alloc } = this;
+        let iter = items.split_into_parts(num_parts);
+        RcSliceMutParts { iter, alloc }
     }
 
     pub fn into_immut(this: Self) -> RcSlice<T> {
@@ -89,7 +108,6 @@ impl<T> RcSliceMut<T> {
         RcSlice::from_data(data)
     }
 
-    // TODO: split_into_parts
     // TODO: unsplit
 }
 
@@ -208,6 +226,8 @@ impl<T> Iterator for RcSliceMutIter<T> {
         if self.len() == 0 { self.alloc.take(); }
         item
     }
+
+    exact_size_hint!();
 }
 
 impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
@@ -220,3 +240,51 @@ impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
 }
 
 impl<T> FusedIterator for RcSliceMutIter<T> { }
+
+impl<T> RcSliceMutParts<T> {
+    #[inline]
+    pub fn as_slice(&self) -> &[T] { self.iter.as_slice() }
+    #[inline]
+    pub fn as_slice_mut(&mut self) -> &mut [T] { self.iter.as_slice_mut() }
+}
+
+impl<T> ExactSizeIterator for RcSliceMutParts<T> {
+    #[inline]
+    fn len(&self) -> usize { self.iter.len() }
+}
+
+impl<T> Iterator for RcSliceMutParts<T> {
+    type Item = RcSliceMut<T>;
+
+    fn next(&mut self) -> Option<RcSliceMut<T>> {
+        self.iter.next().map(|items| {
+            let alloc = if self.as_slice().len() == 0 {
+                self.alloc.take()
+            } else if items.len() > 0 {
+                self.alloc.clone()
+            } else {
+                None
+            };
+            RcSliceMut { items, alloc }
+        })
+    }
+
+    exact_size_hint!();
+}
+
+impl<T> DoubleEndedIterator for RcSliceMutParts<T> {
+    fn next_back(&mut self) -> Option<RcSliceMut<T>> {
+        self.iter.next_back().map(|items| {
+            let alloc = if self.as_slice().len() == 0 {
+                self.alloc.take()
+            } else if items.len() > 0 {
+                self.alloc.clone()
+            } else {
+                None
+            };
+            RcSliceMut { items, alloc }
+        })
+    }
+}
+
+impl<T> FusedIterator for RcSliceMutParts<T> { }

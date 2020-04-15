@@ -51,20 +51,16 @@ fn drops_its_data() {
 #[test]
 fn drops_only_when_no_strong_refs() {
     let dropped = RefCell::new(Vec::new());
-
-    {
-        let slice = RcSlice::from_vec(vec![
-            DropTracker("a", &dropped),
-            DropTracker("b", &dropped),
-            DropTracker("c", &dropped),
-        ]);
-        {
-            let _ = slice.clone();
-        }
-        // Still 0 even after clone is dropped
-        assert_eq!(0, dropped.borrow().len());
-    }
-
+    let slice = RcSlice::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+    ]);
+    let clone = slice.clone();
+    drop(clone);
+    // Still 0 even after clone is dropped
+    assert_eq!(0, dropped.borrow().len());
+    drop(slice);
     dropped.borrow_mut().sort_unstable();
     assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
@@ -72,21 +68,16 @@ fn drops_only_when_no_strong_refs() {
 #[test]
 fn drops_when_subs_dropped() {
     let dropped = RefCell::new(Vec::new());
-
-    {
-        let mut slice = RcSlice::from_vec(vec![
-            DropTracker("a", &dropped),
-            DropTracker("b", &dropped),
-            DropTracker("c", &dropped),
-        ]);
-        {
-            RcSlice::split_off_left(&mut slice);
-        }
-        // We should've dropped the 1 item from the left subslice
-        dropped.borrow_mut().sort_unstable();
-        assert_eq!(["a"], dropped.borrow()[..]);
-    }
-
+    let mut slice = RcSlice::from_vec(vec![
+        DropTracker("a", &dropped),
+        DropTracker("b", &dropped),
+        DropTracker("c", &dropped),
+    ]);
+    RcSlice::split_off_left(&mut slice);
+    // We should've dropped the 1 item from the left subslice
+    dropped.borrow_mut().sort_unstable();
+    assert_eq!(["a"], dropped.borrow()[..]);
+    drop(slice);
     dropped.borrow_mut().sort_unstable();
     assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
@@ -423,6 +414,22 @@ fn split_into_parts_not_power_of_2() {
 fn split_into_zero_parts() {
     let slice = RcSlice::from_vec(vec![0]);
     RcSlice::split_into_parts(slice, 0);
+}
+
+#[test]
+fn rc_slice_parts_as_slice() {
+    let slice = RcSlice::from_vec(vec![0, 5, 10, 15, 20]);
+    let mut parts = RcSlice::split_into_parts(slice, 4);
+    assert_eq!([0, 5, 10, 15, 20], parts.as_slice());
+    assert_eq!([0], parts.next().unwrap()[..]);
+    assert_eq!([5, 10, 15, 20], parts.as_slice());
+    assert_eq!([15, 20], parts.next_back().unwrap()[..]);
+    assert_eq!([5, 10], parts.as_slice());
+    assert_eq!([10], parts.next_back().unwrap()[..]);
+    assert_eq!([5], parts.as_slice());
+    assert_eq!([5], parts.next().unwrap()[..]);
+    assert_eq!(0, parts.len());
+    assert_eq!(0, parts.as_slice().len());
 }
 
 #[test]

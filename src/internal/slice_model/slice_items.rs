@@ -23,6 +23,16 @@ pub struct SliceItemsIter<T> {
     phantom: PhantomData<T>,
 }
 
+#[derive(Debug)]
+pub struct SliceItemsParts<T> {
+    orig_ptr: NonNull<T>,
+    orig_len: usize,
+    num_parts: usize,
+    num_yielded_front: usize,
+    num_yielded_back: usize,
+    phantom: PhantomData<T>,
+}
+
 impl<T> SliceItems<T> {
     /// Construct a new `SliceItems` instance.
     /// Unsafe for several reasons:
@@ -72,7 +82,9 @@ impl<T> SliceItems<T> {
         unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len >> 1) as isize)) }
     }
 
-    // TODO: split_into_parts
+    pub fn split_into_parts(self, num_parts: usize) -> SliceItemsParts<T> {
+        SliceItemsParts::new(self, num_parts)
+    }
 }
 
 impl<T> Drop for SliceItems<T> {
@@ -125,7 +137,7 @@ impl<T> SliceItemsIter<T> {
     }
 
     pub fn split_off_from(&mut self, at: usize) -> Self {
-        assert!(at <= self.len(), "{} <= {}", at, self.len());
+        assert!(at <= self.len(), "at <= self.len(): {} <= {}", at, self.len());
         let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
         let split = SliceItemsIter { start: split_pt, end: self.end, phantom: PhantomData };
         self.end = split_pt;
@@ -133,7 +145,7 @@ impl<T> SliceItemsIter<T> {
     }
 
     pub fn split_off_to(&mut self, at: usize) -> Self {
-        assert!(at <= self.len(), "{} <= {}", at, self.len());
+        assert!(at <= self.len(), "at <= self.len(): {} <= {}", at, self.len());
         let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
         let split = SliceItemsIter { start: self.start, end: split_pt, phantom: PhantomData };
         self.start = split_pt;
@@ -164,9 +176,7 @@ impl<T> Iterator for SliceItemsIter<T> {
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len(), Some(self.len()))
-    }
+    exact_size_hint!();
 }
 
 impl<T> DoubleEndedIterator for SliceItemsIter<T> {
@@ -187,6 +197,146 @@ impl<T> FusedIterator for SliceItemsIter<T> { }
 impl<T> Drop for SliceItemsIter<T> {
     fn drop(&mut self) {
         // As for SliceItems, use [T]'s drop impl
-        unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(self.start.as_ptr(), self.len())) }
+        unsafe { ptr::drop_in_place(self.as_slice_mut()); }
+    }
+}
+
+impl<T> SliceItemsParts<T> {
+    fn new(slice_items: SliceItems<T>, num_parts: usize) -> Self {
+        assert_ne!(0, num_parts, "num_parts > 0");
+        let mut n = num_parts;
+        while n & 1 == 0 { n >>= 1; }
+        assert_eq!(1, n, "num_parts {} is a power of 2", num_parts);
+        let orig_ptr = slice_items.ptr;
+        let orig_len = slice_items.len;
+        mem::forget(slice_items);
+        SliceItemsParts {
+            orig_ptr,
+            orig_len,
+            num_parts,
+            num_yielded_front: 0,
+            num_yielded_back: 0,
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        let (data, len) = self.as_raw_slice_parts();
+        unsafe { slice::from_raw_parts(data, len) }
+    }
+
+    pub fn as_slice_mut(&mut self) -> &mut [T] {
+        let (data, len) = self.as_raw_slice_parts();
+        unsafe { slice::from_raw_parts_mut(data, len) }
+    }
+
+    fn as_raw_slice_parts(&self) -> (*mut T, usize) {
+        if self.len() > 0 {
+            // TODO: Support ZSTs
+            let mut start = self.orig_ptr.as_ptr();
+            let mut end = unsafe { start.offset(self.orig_len as isize) };
+
+            // Refine start based on num_yielded_front
+            let mut len = self.orig_len;
+            let mut mask = self.num_parts >> 1;
+            while mask > 0 {
+                if self.num_yielded_front & mask == 0 {
+                    len = len >> 1;
+                } else {
+                    start = unsafe { start.offset((len >> 1) as isize) };
+                    len = len - (len >> 1);
+                }
+                mask >>= 1;
+            }
+
+            // Refine end based on num_yielded_back
+            len = self.orig_len;
+            mask = self.num_parts >> 1;
+            while mask > 0 {
+                if self.num_yielded_back & mask == 0 {
+                    len = len - (len >> 1);
+                } else {
+                    end = unsafe { end.offset(-((len - (len >> 1)) as isize)) };
+                    len = len >> 1;
+                }
+                mask >>= 1;
+            }
+
+            let len = (end as usize - start as usize) / mem::size_of::<T>();
+            (start, len)
+        } else {
+            (NonNull::dangling().as_ptr(), 0)
+        }
+    }
+}
+
+impl<T> ExactSizeIterator for SliceItemsParts<T> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.num_parts - self.num_yielded_front - self.num_yielded_back
+    }
+}
+
+impl<T> Iterator for SliceItemsParts<T> {
+    type Item = SliceItems<T>;
+
+    fn next(&mut self) -> Option<SliceItems<T>> {
+        if 0 == self.len() {
+            None
+        } else {
+            let mut ptr = self.orig_ptr.as_ptr();
+            let mut len = self.orig_len;
+            let mut mask = self.num_parts >> 1;
+            while mask > 0 {
+                if self.num_yielded_front & mask == 0 {
+                    len = len >> 1;
+                } else {
+                    // TODO: Support ZSTs
+                    ptr = unsafe { ptr.offset((len >> 1) as isize) };
+                    len = len - (len >> 1);
+                }
+                mask >>= 1;
+            }
+            let ptr = unsafe { NonNull::new_unchecked(ptr) };
+            self.num_yielded_front += 1;
+            Some(SliceItems { ptr, len, phantom: PhantomData })
+        }
+    }
+
+    exact_size_hint!();
+}
+
+impl<T> DoubleEndedIterator for SliceItemsParts<T> {
+    fn next_back(&mut self) -> Option<SliceItems<T>> {
+        // The exact mirror image of next(...).
+        if 0 == self.len() {
+            None
+        } else {
+            let mut ptr = self.orig_ptr.as_ptr();
+            let mut len = self.orig_len;
+            let mut mask = self.num_parts >> 1;
+            while mask > 0 {
+                // Note that the two branches of this conditional are reversed compared to next(...).
+                if self.num_yielded_back & mask == 0 {
+                    // TODO: Support ZSTs
+                    ptr = unsafe { ptr.offset((len >> 1) as isize) };
+                    len = len - (len >> 1);
+                } else {
+                    len = len >> 1;
+                }
+                mask >>= 1;
+            }
+            let ptr = unsafe { NonNull::new_unchecked(ptr) };
+            self.num_yielded_back += 1;
+            Some(SliceItems { ptr, len, phantom: PhantomData })
+        }
+    }
+}
+
+impl<T> FusedIterator for SliceItemsParts<T> { }
+
+impl<T> Drop for SliceItemsParts<T> {
+    fn drop(&mut self) {
+        unsafe { ptr::drop_in_place(self.as_slice_mut()); }
     }
 }
