@@ -97,6 +97,10 @@ impl<T> Drop for SliceItems<T> {
     }
 }
 
+// For concurrency purposes, SliceItems<T> acts like Vec<T> or Box<[T]>.
+unsafe impl<T: Send> Send for SliceItems<T> { }
+unsafe impl<T: Sync> Sync for SliceItems<T> { }
+
 impl<T> Deref for SliceItems<T> {
     type Target = [T];
 
@@ -132,7 +136,7 @@ impl<T> SliceItemsIter<T> {
         unsafe { slice::from_raw_parts(self.start.as_ptr(), self.len()) }
     }
 
-    pub fn as_slice_mut(&mut self) -> &mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.start.as_ptr(), self.len()) }
     }
 
@@ -152,6 +156,11 @@ impl<T> SliceItemsIter<T> {
         split
     }
 }
+
+// SliceItemsIter<T> acts like SliceItems<T> for concurrency purposes (or
+// maybe a better comparison is vec's IntoIter).
+unsafe impl<T: Send> Send for SliceItemsIter<T> { }
+unsafe impl<T: Sync> Sync for SliceItemsIter<T> { }
 
 impl<T> ExactSizeIterator for SliceItemsIter<T> {
     #[inline]
@@ -197,7 +206,7 @@ impl<T> FusedIterator for SliceItemsIter<T> { }
 impl<T> Drop for SliceItemsIter<T> {
     fn drop(&mut self) {
         // As for SliceItems, use [T]'s drop impl
-        unsafe { ptr::drop_in_place(self.as_slice_mut()); }
+        unsafe { ptr::drop_in_place(self.as_mut_slice()); }
     }
 }
 
@@ -225,7 +234,7 @@ impl<T> SliceItemsParts<T> {
         unsafe { slice::from_raw_parts(data, len) }
     }
 
-    pub fn as_slice_mut(&mut self) -> &mut [T] {
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
         let (data, len) = self.as_raw_slice_parts();
         unsafe { slice::from_raw_parts_mut(data, len) }
     }
@@ -269,6 +278,11 @@ impl<T> SliceItemsParts<T> {
         }
     }
 }
+
+// SliceItemsParts<T> acts like SliceItems<T> for concurrency purposes (or
+// maybe a better comparison is vec's IntoIter).
+unsafe impl<T: Send> Send for SliceItemsParts<T> { }
+unsafe impl<T: Sync> Sync for SliceItemsParts<T> { }
 
 impl<T> ExactSizeIterator for SliceItemsParts<T> {
     #[inline]
@@ -337,6 +351,6 @@ impl<T> FusedIterator for SliceItemsParts<T> { }
 
 impl<T> Drop for SliceItemsParts<T> {
     fn drop(&mut self) {
-        unsafe { ptr::drop_in_place(self.as_slice_mut()); }
+        unsafe { ptr::drop_in_place(self.as_mut_slice()); }
     }
 }

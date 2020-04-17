@@ -30,3 +30,10 @@ impl<T> Drop for SliceAlloc<T> {
         unsafe { Vec::from_raw_parts(self.ptr.as_ptr(), 0, self.len); }
     }
 }
+
+// Maybe surprisingly, SliceAlloc<T> is both Send and Sync regardless of
+// whether or not T is either. The ONLY thing SliceAlloc<T> lets you do
+// is deallocate, for which you need a mutable reference. The T in
+// SliceAlloc<T> is really only there to provide the units for len.
+unsafe impl<T> Send for SliceAlloc<T> { }
+unsafe impl<T> Sync for SliceAlloc<T> { }

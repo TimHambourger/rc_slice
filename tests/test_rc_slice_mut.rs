@@ -259,16 +259,16 @@ fn rc_slice_mut_iter_as_slice() {
 }
 
 #[test]
-fn rc_slice_mut_iter_as_slice_mut() {
+fn rc_slice_mut_iter_as_mut_slice() {
     let slice = RcSliceMut::from_vec(vec![10, 20, 30, 40, 50]);
     let mut iter = slice.into_iter();
-    iter.as_slice_mut()[0] = 60;
+    iter.as_mut_slice()[0] = 60;
     assert_eq!([60, 20, 30, 40, 50], iter.as_slice());
     assert_eq!(60, iter.next().unwrap());
-    iter.as_slice_mut()[3] = 70;
+    iter.as_mut_slice()[3] = 70;
     assert_eq!([20, 30, 40, 70], iter.as_slice());
     assert_eq!(70, iter.next_back().unwrap());
-    iter.as_slice_mut()[1] = 80;
+    iter.as_mut_slice()[1] = 80;
     assert_eq!([20, 80, 40], iter.as_slice());
     assert_eq!(20, iter.next().unwrap());
     assert_eq!(80, iter.next().unwrap());
@@ -627,13 +627,13 @@ fn rc_slice_mut_parts_as_slice() {
 }
 
 #[test]
-fn rc_slice_mut_parts_as_slice_mut() {
+fn rc_slice_mut_parts_as_mut_slice() {
     let slice = RcSliceMut::from_vec(vec![10, 20, 30, 40, 50]);
     let mut parts = RcSliceMut::split_into_parts(slice, 2);
-    parts.as_slice_mut()[0] = 60;
+    parts.as_mut_slice()[0] = 60;
     assert_eq!([60, 20, 30, 40, 50], parts.as_slice());
     assert_eq!([60, 20], parts.next().unwrap()[..]);
-    parts.as_slice_mut()[2] = 70;
+    parts.as_mut_slice()[2] = 70;
     assert_eq!([30, 40, 70], parts.as_slice()[..]);
     assert_eq!([30, 40, 70], parts.next_back().unwrap()[..]);
     assert_eq!(0, parts.len());

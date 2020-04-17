@@ -1,6 +1,5 @@
 use core::{
     borrow::{Borrow, BorrowMut},
-    convert::TryFrom,
     hash::{Hash, Hasher},
     mem,
     cmp::Ordering,
@@ -10,7 +9,7 @@ use core::{
 };
 use alloc::{
     boxed::Box,
-    rc::Rc,
+    sync::Arc,
     vec::Vec,
 };
 
@@ -21,38 +20,36 @@ use crate::{
         SliceItemsIter,
         SliceItemsParts,
     },
-    rc::rc_slice::{RcSlice, RcSliceData},
 };
 
-/// A unique reference to a subslice of a reference counted slice.
 #[derive(Debug)]
-pub struct RcSliceMut<T> {
+pub struct ArcSliceMut<T> {
     items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
     // don't need an underlying allocation.
-    alloc: Option<Rc<SliceAlloc<T>>>,
+    alloc: Option<Arc<SliceAlloc<T>>>,
 }
 
 #[derive(Debug)]
-pub struct RcSliceMutIter<T> {
+pub struct ArcSliceMutIter<T> {
     iter: SliceItemsIter<T>,
-    alloc: Option<Rc<SliceAlloc<T>>>,
+    alloc: Option<Arc<SliceAlloc<T>>>,
 }
 
 #[derive(Debug)]
-pub struct RcSliceMutParts<T> {
+pub struct ArcSliceMutParts<T> {
     iter: SliceItemsParts<T>,
-    alloc: Option<Rc<SliceAlloc<T>>>,
+    alloc: Option<Arc<SliceAlloc<T>>>,
 }
 
-impl<T> RcSliceMut<T> {
+impl<T> ArcSliceMut<T> {
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
         assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
         let len = slice.len();
         unsafe {
             // Waiting on stabilization of Box::into_raw_non_null
             let ptr = NonNull::new_unchecked(Box::into_raw(slice) as _);
-            let alloc = if len == 0 { None } else { Some(Rc::new(SliceAlloc::new(ptr, len))) };
+            let alloc = if len == 0 { None } else { Some(Arc::new(SliceAlloc::new(ptr, len))) };
             Self::from_raw_parts(ptr, len, alloc)
         }
     }
@@ -61,91 +58,67 @@ impl<T> RcSliceMut<T> {
         Self::from_boxed_slice(vec.into_boxed_slice())
     }
 
-    pub(in crate::rc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
-        RcSliceMut { items: SliceItems::new(ptr, len), alloc }
+    pub(in crate::arc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Arc<SliceAlloc<T>>>) -> Self {
+        ArcSliceMut { items: SliceItems::new(ptr, len), alloc }
     }
 
     // NOTE: We limit our splitting API to just split_off_left and split_off_right
-    // instead of arbitrary split points for maximum convertability btwn RcSliceMut
-    // and RcSlice. If RcSliceMut allowed arbitrary split points, we could introduce
-    // unsoundness via a series of calls like
-    //   - Split an RcSliceMut at a point other than the midpoint.
-    //   - Convert each resulting sub-RcSliceMut into an RcSlice via
-    //     RcSliceMut::into_immut.
-    //   - Clone each resulting RcSlice.
-    //   - Join the cloned RcSlices via RcSlice::unsplit (not yet implemented).
-    //   - Split the joined RcSlice via RcSlice::split_off_left.
-    // Now you've got RcSlices that overlap each other w/o one being a child of
-    // the other, which our RcSlice internals don't currently support.
-    // Of course, there are other API restrictions we could make to fix the above
-    // (e.g. restrict RcSlice::unsplit to slices that could have resulted from a
-    // split at a midpoint). But restricting RcSliceMut to splits at midpoints
-    // seems like the most intuitive option so long as RcSlice has the same
-    // restriction.
+    // for the same reasons that we limit RcSliceMut to just split_off_left and
+    // split_off_right. See comment in rc_slic_mut.rs for more.
 
     pub fn split_off_left(this: &mut Self) -> Self {
         let new_items = this.items.split_off_left();
         let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
-        RcSliceMut { items: new_items, alloc }
+        ArcSliceMut { items: new_items, alloc }
     }
 
     pub fn split_off_right(this: &mut Self) -> Self {
         let new_items = this.items.split_off_right();
         let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
-        RcSliceMut { items: new_items, alloc }
+        ArcSliceMut { items: new_items, alloc }
     }
 
-    pub fn split_into_parts(this: Self, num_parts: usize) -> RcSliceMutParts<T> {
-        let RcSliceMut { items, alloc } = this;
+    pub fn split_into_parts(this: Self, num_parts: usize) -> ArcSliceMutParts<T> {
+        let ArcSliceMut { items, alloc } = this;
         let iter = items.split_into_parts(num_parts);
-        RcSliceMutParts { iter, alloc }
+        ArcSliceMutParts { iter, alloc }
     }
 
-    pub fn into_immut(this: Self) -> RcSlice<T> {
-        let RcSliceMut { items, mut alloc } = this;
-        let (ptr, len) = SliceItems::into_raw_parts(items);
-        let data = unsafe { Rc::new(RcSliceData::from_data_parts(ptr, len, alloc.take())) };
-        RcSlice::from_data(data)
-    }
-
+    // TODO: into_immut
     // TODO: unsplit
 }
 
-impl<T> Deref for RcSliceMut<T> {
+
+impl<T> Deref for ArcSliceMut<T> {
     type Target = [T];
 
     #[inline]
     fn deref(&self) -> &[T] { &self.items }
 }
 
-impl<T> DerefMut for RcSliceMut<T> {
+impl<T> DerefMut for ArcSliceMut<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] { &mut self.items }
 }
 
-impl<T> From<Box<[T]>> for RcSliceMut<T> {
+impl<T> From<Box<[T]>> for ArcSliceMut<T> {
     fn from(slice: Box<[T]>) -> Self {
         Self::from_boxed_slice(slice)
     }
 }
 
-impl<T> From<Vec<T>> for RcSliceMut<T> {
+impl<T> From<Vec<T>> for ArcSliceMut<T> {
     fn from(vec: Vec<T>) -> Self {
         Self::from_vec(vec)
     }
 }
 
-impl<T> TryFrom<RcSlice<T>> for RcSliceMut<T> {
-    type Error = RcSlice<T>;
+// TODO:
+// impl<T> TryFrom<ArcSlice<T>> for ArcSliceMut<T> { ... }
 
-    fn try_from(slice: RcSlice<T>) -> Result<Self, RcSlice<T>> {
-        RcSlice::into_mut(slice)
-    }
-}
-
-impl<T: Clone> Clone for RcSliceMut<T> {
-    /// Clone an `RcSliceMut` by allocating a new vector and cloning items
-    /// into it. Unlike the `clone` impl for `RcSlice`, this does NOT add
+impl<T: Clone> Clone for ArcSliceMut<T> {
+    /// Clone an `ArcSliceMut` by allocating a new vector and cloning items
+    /// into it. Unlike the `clone` impl for `ArcSlice`, this does NOT add
     /// a reference to the original underlying slice but instead constructs
     /// a new slice.
     fn clone(&self) -> Self {
@@ -153,34 +126,32 @@ impl<T: Clone> Clone for RcSliceMut<T> {
     }
 }
 
-impl<T> IntoIterator for RcSliceMut<T> {
+impl<T> IntoIterator for ArcSliceMut<T> {
     type Item = T;
-    type IntoIter = RcSliceMutIter<T>;
+    type IntoIter = ArcSliceMutIter<T>;
 
     #[inline]
-    fn into_iter(self) -> RcSliceMutIter<T> {
-        let RcSliceMut { items, alloc } = self;
-        RcSliceMutIter { iter: items.into_iter(), alloc }
+    fn into_iter(self) -> ArcSliceMutIter<T> {
+        let ArcSliceMut { items, alloc } = self;
+        ArcSliceMutIter { iter: items.into_iter(), alloc }
     }
 }
 
-borrow_as_slice!(RcSliceMut);
-borrow_mut_as_slice!(RcSliceMut);
-compare_as_slice!(RcSliceMut);
-hash_as_slice!(RcSliceMut);
-from_iter_via_vec!(RcSliceMut);
+borrow_as_slice!(ArcSliceMut);
+borrow_mut_as_slice!(ArcSliceMut);
+compare_as_slice!(ArcSliceMut);
+hash_as_slice!(ArcSliceMut);
+from_iter_via_vec!(ArcSliceMut);
 
-impl<T> RcSliceMutIter<T> {
+
+impl<T> ArcSliceMutIter<T> {
     #[inline]
     pub fn as_slice(&self) -> &[T] { self.iter.as_slice() }
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] { self.iter.as_mut_slice() }
 
-    // NOTE: Unlike RcSliceMut, we DO support splits at arbitrary points for
-    // RcSliceMutIter. That's b/c we have no plans for allowing conversions from
-    // an RcSliceMutIter back to an RcSliceMut or RcSlice. Since you can remove
-    // items from an RcSliceMutIter one at a time, such conversions would already
-    // be unsound for the reasons given above.
+    // NOTE: As w/ RcSliceMutIter, we DO allow arbitrary splits for ArcSliceMutIter.
+    // See comment in rc_slice_mut.rs for more.
 
     pub fn split_off_from(&mut self, at: usize) -> Self {
         let split_iter = self.iter.split_off_from(at);
@@ -191,7 +162,7 @@ impl<T> RcSliceMutIter<T> {
         } else {
             None
         };
-        RcSliceMutIter { iter: split_iter, alloc }
+        ArcSliceMutIter { iter: split_iter, alloc }
     }
 
     pub fn split_off_to(&mut self, at: usize) -> Self {
@@ -203,16 +174,16 @@ impl<T> RcSliceMutIter<T> {
         } else {
             None
         };
-        RcSliceMutIter { iter: split_iter, alloc }
+        ArcSliceMutIter { iter: split_iter, alloc }
     }
 }
 
-impl<T> ExactSizeIterator for RcSliceMutIter<T> {
+impl<T> ExactSizeIterator for ArcSliceMutIter<T> {
     #[inline]
     fn len(&self) -> usize { self.iter.len() }
 }
 
-impl<T> Iterator for RcSliceMutIter<T> {
+impl<T> Iterator for ArcSliceMutIter<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -225,7 +196,7 @@ impl<T> Iterator for RcSliceMutIter<T> {
     exact_size_hint!();
 }
 
-impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
+impl<T> DoubleEndedIterator for ArcSliceMutIter<T> {
     fn next_back(&mut self) -> Option<T> {
         let item = self.iter.next_back();
         // Don't need to hold onto SliceAlloc if length is going to zero
@@ -234,24 +205,24 @@ impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
     }
 }
 
-impl<T> FusedIterator for RcSliceMutIter<T> { }
+impl<T> FusedIterator for ArcSliceMutIter<T> { }
 
-impl<T> RcSliceMutParts<T> {
+impl<T> ArcSliceMutParts<T> {
     #[inline]
     pub fn as_slice(&self) -> &[T] { self.iter.as_slice() }
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] { self.iter.as_mut_slice() }
 }
 
-impl<T> ExactSizeIterator for RcSliceMutParts<T> {
+impl<T> ExactSizeIterator for ArcSliceMutParts<T> {
     #[inline]
     fn len(&self) -> usize { self.iter.len() }
 }
 
-impl<T> Iterator for RcSliceMutParts<T> {
-    type Item = RcSliceMut<T>;
+impl<T> Iterator for ArcSliceMutParts<T> {
+    type Item = ArcSliceMut<T>;
 
-    fn next(&mut self) -> Option<RcSliceMut<T>> {
+    fn next(&mut self) -> Option<ArcSliceMut<T>> {
         self.iter.next().map(|items| {
             let alloc = if self.as_slice().len() == 0 {
                 self.alloc.take()
@@ -260,15 +231,15 @@ impl<T> Iterator for RcSliceMutParts<T> {
             } else {
                 None
             };
-            RcSliceMut { items, alloc }
+            ArcSliceMut { items, alloc }
         })
     }
 
     exact_size_hint!();
 }
 
-impl<T> DoubleEndedIterator for RcSliceMutParts<T> {
-    fn next_back(&mut self) -> Option<RcSliceMut<T>> {
+impl<T> DoubleEndedIterator for ArcSliceMutParts<T> {
+    fn next_back(&mut self) -> Option<ArcSliceMut<T>> {
         self.iter.next_back().map(|items| {
             let alloc = if self.as_slice().len() == 0 {
                 self.alloc.take()
@@ -277,9 +248,9 @@ impl<T> DoubleEndedIterator for RcSliceMutParts<T> {
             } else {
                 None
             };
-            RcSliceMut { items, alloc }
+            ArcSliceMut { items, alloc }
         })
     }
 }
 
-impl<T> FusedIterator for RcSliceMutParts<T> { }
+impl<T> FusedIterator for ArcSliceMutParts<T> { }
