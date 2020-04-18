@@ -1,5 +1,6 @@
 extern crate rc_slice;
 
+#[macro_use]
 mod test_utils;
 
 use std::{
@@ -10,30 +11,7 @@ use std::{
 use rc_slice::RcSliceMut;
 use test_utils::DropTracker;
 
-#[test]
-fn is_covariant() {
-    #[allow(unused_variables)]
-    fn use_slice<'a>(n: &'a u32, slice: &RcSliceMut<&'a u32>) {
-    }
-
-    let slice = RcSliceMut::from_vec(vec![&0]);
-    // Important that x is declared after slice.
-    let x = 0;
-    // If RcSliceMut<T> were invariant in T, then the next line would give
-    // error[E0597]: `x` does not live long enough
-    //   --> tests/test_rc_slice_mut.rs:35:15
-    //    |
-    // 35 |     use_slice(&x, &slice)
-    //    |               ^^ borrowed value does not live long enough
-    // 36 | }
-    //    | -
-    //    | |
-    //    | `x` dropped here while still borrowed
-    //    | borrow might be used here, when `slice` is dropped and runs the destructor for type `rc_slice::RcSliceMut<&u32>`
-    //    |
-    //    = note: values in a scope are dropped in the opposite order they are defined
-    use_slice(&x, &slice)
-}
+is_covariant!(RcSliceMut);
 
 #[test]
 fn drops_its_data() {
@@ -120,12 +98,13 @@ fn into_immut_doesnt_drop() {
     assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
 }
 
-
 #[test]
 fn eq_compares_as_slice() {
     let mut slice = RcSliceMut::from_vec(vec![0, 1, 2, 3, 0, 1, 2, 3]);
     let left = RcSliceMut::split_off_left(&mut slice);
     assert_eq!(left, slice);
+    slice[0] = 5;
+    assert_ne!(left, slice);
 }
 
 #[test]
@@ -133,6 +112,8 @@ fn ord_compares_as_slice() {
     let mut slice = RcSliceMut::from_vec(vec![0, 2, 1, 1]);
     let left = RcSliceMut::split_off_left(&mut slice);
     assert!(left < slice);
+    slice[0] = 0;
+    assert!(slice < left);
 }
 
 #[test]
@@ -431,7 +412,7 @@ fn split_into_parts_partial_iteration() {
 fn split_into_parts_front_and_back() {
     let slice = RcSliceMut::from_vec(vec![0, 1, 2, 3]);
 
-        // All possible "walks" (sequences of next/next_back calls) for a split
+    // All possible "walks" (sequences of next/next_back calls) for a split
     // into 4 parts, excluding the walk consisting purely of next calls,
     // since we have other tests that focus just on forward iteration.
     // 2 ^ 4 - 1 = 15 different walks.
