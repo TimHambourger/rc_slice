@@ -44,7 +44,7 @@ impl<T> SliceItems<T> {
     /// items in the indicated subslice.
     pub unsafe fn new(ptr: NonNull<T>, len: usize) -> Self {
         assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
-        SliceItems { ptr, len, phantom: PhantomData }
+        Self { ptr, len, phantom: PhantomData }
     }
 
     pub fn into_raw_parts(this: Self) -> (NonNull<T>, usize) {
@@ -129,7 +129,7 @@ impl<T> SliceItemsIter<T> {
         let start = slice_items.ptr;
         let end = unsafe { NonNull::new_unchecked(start.as_ptr().offset(slice_items.len as isize)) };
         mem::forget(slice_items);
-        SliceItemsIter { start, end, phantom: PhantomData }
+        Self { start, end, phantom: PhantomData }
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -143,7 +143,7 @@ impl<T> SliceItemsIter<T> {
     pub fn split_off_from(&mut self, at: usize) -> Self {
         assert!(at <= self.len(), "at <= self.len(): {} <= {}", at, self.len());
         let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
-        let split = SliceItemsIter { start: split_pt, end: self.end, phantom: PhantomData };
+        let split = Self { start: split_pt, end: self.end, phantom: PhantomData };
         self.end = split_pt;
         split
     }
@@ -151,7 +151,7 @@ impl<T> SliceItemsIter<T> {
     pub fn split_off_to(&mut self, at: usize) -> Self {
         assert!(at <= self.len(), "at <= self.len(): {} <= {}", at, self.len());
         let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
-        let split = SliceItemsIter { start: self.start, end: split_pt, phantom: PhantomData };
+        let split = Self { start: self.start, end: split_pt, phantom: PhantomData };
         self.start = split_pt;
         split
     }
@@ -219,7 +219,7 @@ impl<T> SliceItemsParts<T> {
         let orig_ptr = slice_items.ptr;
         let orig_len = slice_items.len;
         mem::forget(slice_items);
-        SliceItemsParts {
+        Self {
             orig_ptr,
             orig_len,
             num_parts,

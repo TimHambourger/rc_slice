@@ -1,9 +1,9 @@
 #[macro_export]
 macro_rules! hash_as_slice {
     ($struct:ident) => {
-        impl<T: Hash> Hash for $struct<T> {
-            fn hash<H: Hasher>(&self, state: &mut H) {
-                Hash::hash(&**self, state);
+        impl<T: core::hash::Hash> core::hash::Hash for $struct<T> {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                core::hash::Hash::hash(&**self, state);
             }
         }
     };

@@ -1,9 +1,7 @@
 use core::{
-    borrow::{Borrow, BorrowMut},
-    hash::{Hash, Hasher},
+    convert::TryFrom,
     mem,
-    cmp::Ordering,
-    iter::{FromIterator, FusedIterator},
+    iter::FusedIterator,
     ops::{Deref, DerefMut},
     ptr::NonNull,
 };
@@ -12,7 +10,6 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-
 use crate::{
     internal::slice_model::{
         SliceAlloc,
@@ -20,6 +17,7 @@ use crate::{
         SliceItemsIter,
         SliceItemsParts,
     },
+    arc::arc_slice::{ArcSlice, ArcSliceData},
 };
 
 #[derive(Debug)]
@@ -59,7 +57,7 @@ impl<T> ArcSliceMut<T> {
     }
 
     pub(in crate::arc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Arc<SliceAlloc<T>>>) -> Self {
-        ArcSliceMut { items: SliceItems::new(ptr, len), alloc }
+        Self { items: SliceItems::new(ptr, len), alloc }
     }
 
     // NOTE: We limit our splitting API to just split_off_left and split_off_right
@@ -69,13 +67,13 @@ impl<T> ArcSliceMut<T> {
     pub fn split_off_left(this: &mut Self) -> Self {
         let new_items = this.items.split_off_left();
         let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
-        ArcSliceMut { items: new_items, alloc }
+        Self { items: new_items, alloc }
     }
 
     pub fn split_off_right(this: &mut Self) -> Self {
         let new_items = this.items.split_off_right();
         let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
-        ArcSliceMut { items: new_items, alloc }
+        Self { items: new_items, alloc }
     }
 
     pub fn split_into_parts(this: Self, num_parts: usize) -> ArcSliceMutParts<T> {
@@ -84,7 +82,13 @@ impl<T> ArcSliceMut<T> {
         ArcSliceMutParts { iter, alloc }
     }
 
-    // TODO: into_immut
+    pub fn into_immut(this: Self) -> ArcSlice<T> {
+        let ArcSliceMut { items, mut alloc } = this;
+        let (ptr, len) = SliceItems::into_raw_parts(items);
+        let data = unsafe { Arc::new(ArcSliceData::from_data_parts(ptr, len, alloc.take())) };
+        ArcSlice::from_data(data)
+    }
+
     // TODO: unsplit
 }
 
@@ -113,8 +117,13 @@ impl<T> From<Vec<T>> for ArcSliceMut<T> {
     }
 }
 
-// TODO:
-// impl<T> TryFrom<ArcSlice<T>> for ArcSliceMut<T> { ... }
+impl<T> TryFrom<ArcSlice<T>> for ArcSliceMut<T> {
+    type Error = ArcSlice<T>;
+
+    fn try_from(slice: ArcSlice<T>) -> Result<Self, ArcSlice<T>> {
+        ArcSlice::into_mut(slice)
+    }
+}
 
 impl<T: Clone> Clone for ArcSliceMut<T> {
     /// Clone an `ArcSliceMut` by allocating a new vector and cloning items
@@ -143,7 +152,6 @@ compare_as_slice!(ArcSliceMut);
 hash_as_slice!(ArcSliceMut);
 from_iter_via_vec!(ArcSliceMut);
 
-
 impl<T> ArcSliceMutIter<T> {
     #[inline]
     pub fn as_slice(&self) -> &[T] { self.iter.as_slice() }
@@ -162,7 +170,7 @@ impl<T> ArcSliceMutIter<T> {
         } else {
             None
         };
-        ArcSliceMutIter { iter: split_iter, alloc }
+        Self { iter: split_iter, alloc }
     }
 
     pub fn split_off_to(&mut self, at: usize) -> Self {
@@ -174,7 +182,7 @@ impl<T> ArcSliceMutIter<T> {
         } else {
             None
         };
-        ArcSliceMutIter { iter: split_iter, alloc }
+        Self { iter: split_iter, alloc }
     }
 }
 

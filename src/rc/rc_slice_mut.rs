@@ -1,10 +1,7 @@
 use core::{
-    borrow::{Borrow, BorrowMut},
     convert::TryFrom,
-    hash::{Hash, Hasher},
     mem,
-    cmp::Ordering,
-    iter::{FromIterator, FusedIterator},
+    iter::FusedIterator,
     ops::{Deref, DerefMut},
     ptr::NonNull,
 };
@@ -13,7 +10,6 @@ use alloc::{
     rc::Rc,
     vec::Vec,
 };
-
 use crate::{
     internal::slice_model::{
         SliceAlloc,
@@ -62,7 +58,7 @@ impl<T> RcSliceMut<T> {
     }
 
     pub(in crate::rc) unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
-        RcSliceMut { items: SliceItems::new(ptr, len), alloc }
+        Self { items: SliceItems::new(ptr, len), alloc }
     }
 
     // NOTE: We limit our splitting API to just split_off_left and split_off_right
@@ -86,13 +82,13 @@ impl<T> RcSliceMut<T> {
     pub fn split_off_left(this: &mut Self) -> Self {
         let new_items = this.items.split_off_left();
         let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
-        RcSliceMut { items: new_items, alloc }
+        Self { items: new_items, alloc }
     }
 
     pub fn split_off_right(this: &mut Self) -> Self {
         let new_items = this.items.split_off_right();
         let alloc = if new_items.len() > 0 { this.alloc.clone() } else { None };
-        RcSliceMut { items: new_items, alloc }
+        Self { items: new_items, alloc }
     }
 
     pub fn split_into_parts(this: Self, num_parts: usize) -> RcSliceMutParts<T> {
@@ -191,7 +187,7 @@ impl<T> RcSliceMutIter<T> {
         } else {
             None
         };
-        RcSliceMutIter { iter: split_iter, alloc }
+        Self { iter: split_iter, alloc }
     }
 
     pub fn split_off_to(&mut self, at: usize) -> Self {
@@ -203,7 +199,7 @@ impl<T> RcSliceMutIter<T> {
         } else {
             None
         };
-        RcSliceMutIter { iter: split_iter, alloc }
+        Self { iter: split_iter, alloc }
     }
 }
 

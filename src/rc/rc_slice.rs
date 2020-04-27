@@ -1,9 +1,6 @@
 use core::{
-    borrow::Borrow,
     cell::{Cell, RefCell},
-    cmp::Ordering,
-    hash::{Hash, Hasher},
-    iter::{FromIterator, FusedIterator},
+    iter::FusedIterator,
     marker::PhantomData,
     mem,
     ops::Deref,
@@ -12,13 +9,14 @@ use core::{
 };
 use alloc::{
     boxed::Box,
-    collections::VecDeque,
     rc::{Rc, Weak},
     vec::Vec,
 };
-
 use crate::{
-    internal::slice_model::SliceAlloc,
+    internal::{
+        bin_parts_iter::{BinaryPartsIter, BinarySplitOff, SplitAsSlice},
+        slice_model::SliceAlloc,
+    },
     rc::RcSliceMut,
 };
 
@@ -89,7 +87,7 @@ pub struct RcSlice<T> {
 }
 
 /// A weak reference to a reference counted slice. Comparable to
-/// std::rc::Weak<[T]>
+/// std::rc::Weak<[T]>.
 #[derive(Debug)]
 pub struct WeakSlice<T> {
     data: Weak<RcSliceData<T>>,
@@ -100,10 +98,7 @@ pub struct WeakSlice<T> {
 /// A double-ended iterator over roughly-even subslices of a starting RcSlice.
 #[derive(Debug)]
 pub struct RcSliceParts<T> {
-    num_parts: usize,
-    num_yielded_front: usize,
-    num_yielded_back: usize,
-    deque: VecDeque<RcSlice<T>>,
+    iter: BinaryPartsIter<RcSlice<T>>,
 }
 
 impl<T> RcSliceData<T> {
@@ -123,7 +118,7 @@ impl<T> RcSliceData<T> {
     }
 
     fn with_data_and_parent(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>, parent: Weak<Self>) -> Self {
-        RcSliceData {
+        Self {
             ptr,
             len,
             alloc,
@@ -158,17 +153,17 @@ impl<T> RcSliceData<T> {
         }
     }
 
-    unsafe fn clone_child(self: &Rc<Self>, cell: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
-        cell.get().map_or_else(
+    unsafe fn clone_child(self: &Rc<Self>, child: &Cell<Option<NonNull<()>>>, ptr: NonNull<T>, len: usize) -> Rc<Self> {
+        child.get().map_or_else(
             || {
                 let alloc = if len == 0 { None } else { self.alloc.clone() };
                 let new = Rc::new(Self::with_data_and_parent(ptr, len, alloc, Rc::downgrade(self)));
                 let clone = new.clone();
-                cell.set(Some(NonNull::new_unchecked(Rc::into_raw(new) as _)));
+                child.set(Some(NonNull::new_unchecked(Rc::into_raw(new) as _)));
                 clone
             },
-            |ptr| {
-                let existing = Rc::from_raw(ptr.as_ptr() as *const Self);
+            |child| {
+                let existing = Rc::from_raw(child.as_ptr() as *const Self);
                 let clone = existing.clone();
                 mem::forget(existing);
                 clone
@@ -184,8 +179,8 @@ impl<T> RcSliceData<T> {
         Self::take_child(&mut self.right_child)
     }
 
-    fn take_child(cell: &mut Cell<Option<NonNull<()>>>) -> Option<Rc<Self>> {
-        cell.get_mut().take().map(|ptr| unsafe { Rc::from_raw(ptr.as_ptr() as *const Self) })
+    fn take_child(child: &mut Cell<Option<NonNull<()>>>) -> Option<Rc<Self>> {
+        child.get_mut().take().map(|child| unsafe { Rc::from_raw(child.as_ptr() as *const Self) })
     }
 
     fn left_sub(&self) -> (NonNull<T>, usize) {
@@ -263,7 +258,7 @@ impl DataGuard {
             // no parent guard.
             let parent_guard = data.parent.upgrade()
                 .map(|parent_data| Self::guard(&parent_data));
-            let guard = Rc::new(DataGuard { _parent: parent_guard });
+            let guard = Rc::new(Self { _parent: parent_guard });
             // Save a weak ref to the new guard in the passed data instance
             *data.guard.borrow_mut() = Rc::downgrade(&guard);
             guard
@@ -274,7 +269,7 @@ impl DataGuard {
 impl<T> RcSlice<T> {
     pub (in crate::rc) fn from_data(data: Rc<RcSliceData<T>>) -> Self {
         let data_guard = DataGuard::guard(&data);
-        RcSlice { data, data_guard }
+        Self { data, data_guard }
     }
 
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
@@ -320,6 +315,10 @@ impl<T> RcSlice<T> {
         // own, so the only way any WeakSlice could still hold an active
         // reference to one of those other RcSliceDatas would be if there
         // was also another RcSlice around.
+        // TODO: Ack! The last sentence above isn't right: Descendant
+        // WeakSlices create unsoundness w/ the current approach b/c just
+        // the strong ref this RcSlice holds to its RcSliceData is enough
+        // to keep that data and all its descendant datas alive. Refactor!
         let safe_to_mut =
             // We're the only strong ref to our data_guard. Checks that
             // there are no child RcSlices.
@@ -345,13 +344,9 @@ impl<T> RcSlice<T> {
         // same reason Rc::try_unwrap only cares about strong refs.
         if 1 == Rc::strong_count(&this.data_guard) {
             let RcSlice { data, data_guard } = this;
-            Rc::try_unwrap(data).map_or_else(
-                |data| {
-                    // Error unwrapping data. Reconstruct our RcSlice
-                    Err(RcSlice { data, data_guard })
-                },
-                |data| unsafe { Ok(data.into_mut()) }
-            )
+            Rc::try_unwrap(data)
+                .map(|data| unsafe { data.into_mut() })
+                .map_err(|data| RcSlice { data, data_guard })
         } else {
             Err(this)
         }
@@ -368,7 +363,7 @@ impl<T> RcSlice<T> {
 
 impl<T> Clone for RcSlice<T> {
     fn clone(&self) -> Self {
-        RcSlice {
+        Self {
             data: self.data.clone(),
             data_guard: self.data_guard.clone(),
         }
@@ -410,7 +405,7 @@ impl<T> WeakSlice<T> {
     /// Constructs a new `WeakSlice<T>`, without allocating any memory.
     /// Calling `upgrade` on the return value always gives `None`.
     pub fn new() -> Self {
-        WeakSlice { data: Weak::new(), _data_guard: Weak::new() }
+        Self { data: Weak::new(), _data_guard: Weak::new() }
     }
 
     pub fn upgrade(&self) -> Option<RcSlice<T>> {
@@ -438,226 +433,56 @@ impl<T> WeakSlice<T> {
 }
 
 impl<T> Clone for WeakSlice<T> {
-    fn clone(&self) -> WeakSlice<T> {
-        WeakSlice { data: self.data.clone(), _data_guard: self._data_guard.clone() }
+    fn clone(&self) -> Self {
+        Self { data: self.data.clone(), _data_guard: self._data_guard.clone() }
     }
 }
 
+impl<T> BinarySplitOff for RcSlice<T> {
+    #[inline]
+    fn split_off_left(this: &mut Self) -> Self { RcSlice::split_off_left(this) }
+    #[inline]
+    fn split_off_right(this: &mut Self) -> Self { RcSlice::split_off_right(this) }
+}
+
+unsafe impl<T> SplitAsSlice<T> for RcSlice<T> { }
+
 impl<T> RcSliceParts<T> {
+    #[inline]
     fn new(slice: RcSlice<T>, num_parts: usize) -> Self {
-        assert_ne!(0, num_parts, "num_parts > 0");
-        let mut n = num_parts;
-        let mut log: usize = 0;
-        while n & 1 == 0 {
-            log += 1;
-            n >>= 1;
-        }
-        assert_eq!(1, n, "num_parts {} is a power of 2", num_parts);
-        // Ensure our deque has enough capacity to iterate through all subslices
-        // w/o growing. It turns out that for num_parts >= 4, the largest the
-        // deque can possibly be is after you call next() then next_back() (or
-        // next_back() then next(), the state of the deque is the same). This
-        // provides exactly that much capacity. See note below for more.
-        let cap = if log <= 1 { 1 } else { (log << 1) - 2 };
-        let mut deque = VecDeque::with_capacity(cap);
-        deque.push_front(slice);
-        RcSliceParts {
-            num_parts,
-            num_yielded_front: 0,
-            num_yielded_back: 0,
-            deque,
-        }
+        Self { iter: BinaryPartsIter::new(slice, num_parts) }
     }
 
     /// Reference the remaining items in the iterator as a single slice.
+    #[inline]
     pub fn as_slice(&self) -> &[T] {
-        if 0 == self.len() {
-            unsafe { slice::from_raw_parts(NonNull::dangling().as_ptr(), 0) }
-        } else {
-            // TODO: Support ZSTs
-            let start = self.deque.front()
-                .map(|slice| slice.as_ptr())
-                .expect("deque is nonempty when RcSliceParts not done iterating");
-            let end = self.deque.back()
-                .map(|slice| unsafe { slice.as_ptr().offset(slice.len() as isize) })
-                .expect("deque is nonempty when RcSliceParts not done iterating");
-            let len = (end as usize - start as usize) / mem::size_of::<T>();
-            unsafe { slice::from_raw_parts(start, len) }
-        }
+        self.iter.as_slice()
     }
 }
 
 impl<T> ExactSizeIterator for RcSliceParts<T> {
     #[inline]
-    fn len(&self) -> usize {
-        self.num_parts - self.num_yielded_front - self.num_yielded_back
-    }
+    fn len(&self) -> usize { self.iter.len() }
 }
-
-// Explanation of the math behind iterating RcSliceParts:
-//
-// Our basic strategy is to maintain a deque of subslices and to have
-// next() and next_back() subdivide the slices at either end of the
-// deque just enough to be able to yield the next subslice of the
-// appropriate size.
-//
-// E.g. say num_parts = 8. As initially constructed, the deque contains
-// a single RcSlice spanning the entire original slice. To fulfill a
-// call to next(), we subdivide as follows:
-//
-//                 ()        (initial state, one slice that hasn't been subdivided)
-//            L          R   (subdivide in 2)
-//       LL       LR     R   (subdivide L in 2 again)
-//  [LLL]   LLR   LR     R   (subdivide LL in 2 again)
-//
-// In the last step LLL is in square brackets to show that it doens't
-// ever need to get added to the deque since we can yield it immediately.
-// The final state of the deque after the first call to next() is thus
-//
-// LLR  LR  R
-//
-// As another example, if we then call next_back(), we do the following
-// series of subdivisions:
-//
-//  LLR   LR          R
-//  LLR   LR     RL       RR
-//  LLR   LR     RL    RRL   [RRR]
-//
-// Again RRR is in brackets b/c it can be yielded immediately. The final
-// state of the deque is
-//
-// LLR  LR  RL  RRL
-//
-// The result is that the maximum size of the deque is O(log N) where
-// N = num_parts and the cost of one call to next() or next_back() is
-// likewise O(log N) in the worst case.
-//
-// It turns out that next() and next_back() commute w/ each other as far
-// as their actions on the deque are concerned. I.e., to determine the
-// state of the deque at any point, you only need to know num_parts and
-// the number of times next() and next_back() have each been called;
-// the order of those calls is irrelevant.
-//
-// Thus, our implementation of next() basically works as follows:
-// In a loop, call RcSlice::split_off_left on the frontmost slice in the
-// deque and push the returned slice onto the front of the deque. Do this
-// until you've obtained a slice of the appropriate size to be yielded.
-// Also, you can skip pushing this last slice onto the front of the
-// deque since it can be yielded immediately. next_back() works the
-// same way except it calls RcSlice::split_off_right on the backmost
-// slice in the deque and pushes the returned slice onto the back.
-//
-// The real trick w/ both implementations is knowing when to stop looping.
-// We COULD try to deduce this from the lengths of the slices involved,
-// but that doesn't work when you start getting down to small slices:
-// A length 1 slice subdivides as slices of length 0 and 1, so you get
-// length 1 slices at multiple depths in the hierarchy. Or we could
-// store the depth as metadata in our deque along with the actual slice.
-// But that increases memory overhead.
-//
-// But it turns out we can quickly figure out how many times to loop by
-// examining just num_parts, num_yielded_front, and num_yielded_back.
-// Some hand waving examples to convince you that the implementations
-// below actually work:
-//
-// For calls to next() when num_parts = 8:
-//
-// When...
-// num_yielded_front = 0           Split ()         Skip if num_yielded_back > 0
-//                                 Split L          Skip if num_yielded_back > 4
-//                                 Split LL         Skip if num_yielded_back > 6
-// num_yielded_front = 2           Split LR         Skip if num_yielded_back > 4
-// num_yielded_front = 4           Split R          Skip if num_yielded_back > 0
-//                                 Split RL         Skip if num_yielded_back > 2
-// num_yielded_front = 6           Split RR         Skip if num_yielded_back > 0
-//
-// The common formula is: Let n be the largest power of 2 that's a factor of
-// the number num_parts - num_yielded_front (which must be positive so long
-// as we haven't yielded all subslices yet). Then you can skip the first
-// split provided num_yielded_back > num_parts - num_yielded_front - n.
-// Or, rearranging, you can skip the first split provided n > len.
-// Set n = n / 2. Then you can skip the next split provided n is still >
-// len. Repeat until n = 1.
 
 impl<T> Iterator for RcSliceParts<T> {
     type Item = RcSlice<T>;
 
-    fn next(&mut self) -> Option<RcSlice<T>> {
-        if 0 == self.len() {
-            None
-        } else {
-            debug_assert_ne!(0, self.deque.len(), "deque is nonempty when RcSliceParts not done iterating");
-            let initial_cap = self.deque.capacity();
-            let mut n = greatest_power_of_2_factor(self.num_parts - self.num_yielded_front);
-            let len = self.len();
-            while n > len { n >>= 1; }
-            let mut item: Option<RcSlice<T>> = None;
-            while n & 1 == 0 {
-                if let Some(item) = item {
-                    self.deque.push_front(item);
-                }
-                item = self.deque.front_mut().map(RcSlice::split_off_left);
-                n >>= 1;
-            }
-            debug_assert_eq!(initial_cap, self.deque.capacity(), "deque doesn't need to re-allocate");
-            self.num_yielded_front += 1;
-            item.or_else(|| self.deque.pop_front())
-        }
-    }
-
+    #[inline]
+    fn next(&mut self) -> Option<RcSlice<T>> { self.iter.next() }
     exact_size_hint!();
 }
 
 impl<T> DoubleEndedIterator for RcSliceParts<T> {
-    fn next_back(&mut self) -> Option<RcSlice<T>> {
-        // The exact mirror image of next(...).
-        if 0 == self.len() {
-            None
-        } else {
-            debug_assert_ne!(0, self.deque.len(), "deque is nonempty when RcSliceParts not done iterating");
-            let initial_cap = self.deque.capacity();
-            let mut n = greatest_power_of_2_factor(self.num_parts - self.num_yielded_back);
-            let len = self.len();
-            while n > len { n >>= 1; }
-            let mut item: Option<RcSlice<T>> = None;
-            while n & 1 == 0 {
-                if let Some(item) = item {
-                    self.deque.push_back(item);
-                }
-                item = self.deque.back_mut().map(RcSlice::split_off_right);
-                n >>= 1;
-            }
-            debug_assert_eq!(initial_cap, self.deque.capacity(), "deque doesn't need to re-allocate");
-            self.num_yielded_back += 1;
-            item.or_else(|| self.deque.pop_back())
-        }
-    }
-}
-
-/// Return the greatest power of 2 that's a factor of the given positive number.
-/// Calling code is responsible for ensuring that the given number is positive.
-#[inline]
-fn greatest_power_of_2_factor(mut n: usize) -> usize {
-    // A debug assertion only since this is a private function and our
-    // calling code should guarantee this.
-    debug_assert_ne!(0, n, "n > 0");
-    let mut p = 1;
-    while n & 1 == 0 {
-        p <<= 1;
-        n >>= 1;
-    }
-    p
+    #[inline]
+    fn next_back(&mut self) -> Option<RcSlice<T>> { self.iter.next_back() }
 }
 
 impl<T> FusedIterator for RcSliceParts<T> { }
 
 impl<T> Clone for RcSliceParts<T> {
+    #[inline]
     fn clone(&self) -> Self {
-        RcSliceParts {
-            num_parts: self.num_parts,
-            num_yielded_front: self.num_yielded_front,
-            num_yielded_back: self.num_yielded_back,
-            deque: self.deque.clone(),
-        }
+        Self { iter: self.iter.clone() }
     }
 }

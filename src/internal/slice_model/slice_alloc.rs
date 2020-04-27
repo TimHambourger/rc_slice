@@ -19,7 +19,7 @@ impl<T> SliceAlloc<T> {
     /// - Calling code MUST NOT attempt to free the underlying allocation
     /// on its own. SliceAlloc takes that responsibility.
     pub unsafe fn new(ptr: NonNull<T>, len: usize) -> Self {
-        SliceAlloc { ptr, len }
+        Self { ptr, len }
     }
 }
 
