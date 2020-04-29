@@ -5,38 +5,35 @@ mod test_utils;
 
 use std::{
     collections::hash_map::HashMap,
-    sync::{Arc, Mutex},
     thread,
 };
 use rc_slice::ArcSliceMut;
-use test_utils::ThreadSafeDropTracker;
+use test_utils::{DroppedItemsSync, DropTracker};
 
 is_covariant!(ArcSliceMut);
 
 #[test]
 fn drops_data_across_threads() {
-    let dropped = Arc::new(Mutex::new(Vec::new()));
+    let dropped = DroppedItemsSync::new();
     let slice = ArcSliceMut::from_vec(vec![
-        ThreadSafeDropTracker("a", dropped.clone()),
-        ThreadSafeDropTracker("b", dropped.clone()),
-        ThreadSafeDropTracker("c", dropped.clone()),
+        DropTracker("a", dropped.clone()),
+        DropTracker("b", dropped.clone()),
+        DropTracker("c", dropped.clone()),
     ]);
     let handle = thread::spawn(move || {
         assert_eq!(["a", "b", "c"], slice[..]);
     });
     handle.join().unwrap();
-    let mut dropped = dropped.lock().unwrap();
-    dropped.sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn split_off_left_across_threads() {
-    let dropped = Arc::new(Mutex::new(Vec::new()));
+    let dropped = DroppedItemsSync::new();
     let mut slice = ArcSliceMut::from_vec(vec![
-        ThreadSafeDropTracker("a", dropped.clone()),
-        ThreadSafeDropTracker("b", dropped.clone()),
-        ThreadSafeDropTracker("c", dropped.clone()),
+        DropTracker("a", dropped.clone()),
+        DropTracker("b", dropped.clone()),
+        DropTracker("c", dropped.clone()),
     ]);
     let left = ArcSliceMut::split_off_left(&mut slice);
     let handle = thread::spawn(move || {
@@ -44,20 +41,18 @@ fn split_off_left_across_threads() {
     });
     assert_eq!(["b", "c"], slice[..]);
     handle.join().unwrap();
-    assert_eq!(["a"], dropped.lock().unwrap()[..]);
+    assert_eq!(["a"], dropped.get_sorted()[..]);
     drop(slice);
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
-    assert_eq!(["a", "b", "c"], d[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn split_off_right_across_threads() {
-    let dropped = Arc::new(Mutex::new(Vec::new()));
+    let dropped = DroppedItemsSync::new();
     let mut slice = ArcSliceMut::from_vec(vec![
-        ThreadSafeDropTracker("a", dropped.clone()),
-        ThreadSafeDropTracker("b", dropped.clone()),
-        ThreadSafeDropTracker("c", dropped.clone()),
+        DropTracker("a", dropped.clone()),
+        DropTracker("b", dropped.clone()),
+        DropTracker("c", dropped.clone()),
     ]);
     let right = ArcSliceMut::split_off_right(&mut slice);
     let handle = thread::spawn(move || {
@@ -65,14 +60,9 @@ fn split_off_right_across_threads() {
     });
     assert_eq!(["a"], slice[..]);
     handle.join().unwrap();
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
-    assert_eq!(["b", "c"], d[..]);
-    drop(d);
+    assert_eq!(["b", "c"], dropped.get_sorted()[..]);
     drop(slice);
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
-    assert_eq!(["a", "b", "c"], d[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 
@@ -147,16 +137,16 @@ fn can_collect() {
 
 #[test]
 fn into_iter_across_threads() {
-    let dropped = Arc::new(Mutex::new(Vec::new()));
+    let dropped = DroppedItemsSync::new();
     let slice = ArcSliceMut::from_vec(vec![
-        ThreadSafeDropTracker("a", dropped.clone()),
-        ThreadSafeDropTracker("b", dropped.clone()),
-        ThreadSafeDropTracker("c", dropped.clone()),
-        ThreadSafeDropTracker("d", dropped.clone()),
-        ThreadSafeDropTracker("e", dropped.clone()),
-        ThreadSafeDropTracker("f", dropped.clone()),
-        ThreadSafeDropTracker("g", dropped.clone()),
-        ThreadSafeDropTracker("h", dropped.clone()),
+        DropTracker("a", dropped.clone()),
+        DropTracker("b", dropped.clone()),
+        DropTracker("c", dropped.clone()),
+        DropTracker("d", dropped.clone()),
+        DropTracker("e", dropped.clone()),
+        DropTracker("f", dropped.clone()),
+        DropTracker("g", dropped.clone()),
+        DropTracker("h", dropped.clone()),
     ]);
     let mut iter1 = slice.into_iter();
     let mut iter2 = iter1.split_off_to(3);
@@ -184,51 +174,41 @@ fn into_iter_across_threads() {
     assert!(iter1.next_back().is_none());
     handle1.join().unwrap();
     handle2.join().unwrap();
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], d[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn arc_slice_mut_iter_as_mut_slice_across_threads() {
-    let dropped = Arc::new(Mutex::new(Vec::new()));
+    let dropped = DroppedItemsSync::new();
     let dropped2 = dropped.clone();
     let mut slice = ArcSliceMut::from_vec(vec![
-        ThreadSafeDropTracker("a", dropped.clone()),
-        ThreadSafeDropTracker("b", dropped.clone()),
-        ThreadSafeDropTracker("c", dropped.clone()),
-        ThreadSafeDropTracker("d", dropped.clone()),
+        DropTracker("a", dropped.clone()),
+        DropTracker("b", dropped.clone()),
+        DropTracker("c", dropped.clone()),
+        DropTracker("d", dropped.clone()),
     ]);
     let right = ArcSliceMut::split_off_right(&mut slice);
     let mut iter = slice.into_iter();
     let mut right_iter = right.into_iter();
     let handle = thread::spawn(move || {
         assert_eq!(["c", "d"], right_iter.as_slice());
-        right_iter.as_mut_slice()[1] = ThreadSafeDropTracker("x", dropped2.clone());
-        let d = dropped2.lock().unwrap();
-        assert!(d.contains(&"d"));
-        drop(d);
+        right_iter.as_mut_slice()[1] = DropTracker("x", dropped2.clone());
+        assert!(dropped2.get_items().contains(&"d"));
         assert_eq!(["c", "x"], right_iter.as_slice());
         assert_eq!("x", right_iter.next_back().unwrap());
     });
     assert_eq!(["a", "b"], iter.as_slice());
-    iter.as_mut_slice()[0] = ThreadSafeDropTracker("y", dropped.clone());
-    let d = dropped.lock().unwrap();
-    assert!(d.contains(&"a"));
-    drop(d);
+    iter.as_mut_slice()[0] = DropTracker("y", dropped.clone());
+    assert!(dropped.get_items().contains(&"a"));
     assert_eq!(["y", "b"], iter.as_slice());
     assert_eq!("y", iter.next().unwrap());
     handle.join().unwrap();
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
     // We moved right_iter into the other thread, so it's been totally dropped.
     // But iter still contains the "b" tracker and hasn't been dropped yet.
-    assert_eq!(["a", "c", "d", "x", "y"], d[..]);
-    drop(d);
+    assert_eq!(["a", "c", "d", "x", "y"], dropped.get_sorted()[..]);
     drop(iter);
-    let d = dropped.lock().unwrap();
-    // Now we've dropped "b"
-    assert_eq!(["a", "c", "d", "x", "y", "b"], d[..]);
+    // Now we've dropped "b" too
+    assert_eq!(&"b", dropped.get_items().last().unwrap());
 }
 
 #[test]
@@ -249,17 +229,17 @@ fn rc_slice_mut_iter_split_off_to_out_of_bounds() {
 
 #[test]
 fn split_into_parts_across_threads() {
-    let dropped = Arc::new(Mutex::new(Vec::new()));
+    let dropped = DroppedItemsSync::new();
     let dropped2 = dropped.clone();
     let slice = ArcSliceMut::from_vec(vec![
-        ThreadSafeDropTracker("a", dropped.clone()),
-        ThreadSafeDropTracker("b", dropped.clone()),
-        ThreadSafeDropTracker("c", dropped.clone()),
-        ThreadSafeDropTracker("d", dropped.clone()),
-        ThreadSafeDropTracker("e", dropped.clone()),
-        ThreadSafeDropTracker("f", dropped.clone()),
-        ThreadSafeDropTracker("g", dropped.clone()),
-        ThreadSafeDropTracker("h", dropped.clone()),
+        DropTracker("a", dropped.clone()),
+        DropTracker("b", dropped.clone()),
+        DropTracker("c", dropped.clone()),
+        DropTracker("d", dropped.clone()),
+        DropTracker("e", dropped.clone()),
+        DropTracker("f", dropped.clone()),
+        DropTracker("g", dropped.clone()),
+        DropTracker("h", dropped.clone()),
     ]);
     let mut parts = ArcSliceMut::split_into_parts(slice, 8);
     let part_a = parts.next().unwrap();
@@ -271,7 +251,7 @@ fn split_into_parts_across_threads() {
         assert_eq!(["b"], part_b[..]);
         drop(part_a);
         drop(part_b);
-        let d = dropped2.lock().unwrap();
+        let d = dropped2.get_items();
         assert!(d.contains(&"a"));
         assert!(d.contains(&"b"));
     });
@@ -279,20 +259,14 @@ fn split_into_parts_across_threads() {
     assert_eq!(["h"], part_h[..]);
     drop(part_g);
     drop(part_h);
-    let d = dropped.lock().unwrap();
+    let d = dropped.get_items();
     assert!(d.contains(&"g"));
     assert!(d.contains(&"h"));
-    drop(d);
     handle.join().unwrap();
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
-    assert_eq!(["a", "b", "g", "h"], d[..]);
-    drop(d);
+    assert_eq!(["a", "b", "g", "h"], dropped.get_sorted()[..]);
     assert_eq!(["c", "d", "e", "f"], parts.as_slice());
     drop(parts);
-    let mut d = dropped.lock().unwrap();
-    d.sort_unstable();
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], d[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
 }
 
 #[test]
@@ -307,4 +281,3 @@ fn arc_slice_mut_parts_as_mut_slice() {
     assert_eq!([30, 40, 70], parts.next_back().unwrap()[..]);
     assert_eq!(0, parts.len());
 }
-

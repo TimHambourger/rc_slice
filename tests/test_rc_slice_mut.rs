@@ -4,26 +4,23 @@ extern crate rc_slice;
 mod test_utils;
 
 use std::{
-    cell::RefCell,
     collections::hash_map::HashMap,
 };
 
 use rc_slice::RcSliceMut;
-use test_utils::DropTracker;
+use test_utils::{DroppedItems, DropTracker};
 
 is_covariant!(RcSliceMut);
 
 #[test]
 fn drops_its_data() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = DroppedItems::new();
     RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
         DropTracker("c", &dropped),
     ]);
-
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
@@ -82,20 +79,19 @@ fn split_off_right_on_length_zero_slice() {
 
 #[test]
 fn into_immut_doesnt_drop() {
-    let dropped = RefCell::new(Vec::<&str>::new());
+    let dropped = DroppedItems::new();
     let slice_mut = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
         DropTracker("c", &dropped),
     ]);
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     let slice = RcSliceMut::into_immut(slice_mut);
     // Not dropped yet
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     drop(slice);
     // Now items are dropped
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
@@ -136,7 +132,7 @@ fn can_collect() {
 
 #[test]
 fn can_clone() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let original = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -145,26 +141,24 @@ fn can_clone() {
     let mut clone = original.clone();
     clone[0] = DropTracker("d", &dropped);
     // We dropped the "a" DropTracker from swapping out the clone's first item
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_sorted()[..]);
     // Clone is updated
     assert_eq!(["d", "b", "c"], clone[..]);
     // Original is unaffected
     assert_eq!(["a", "b", "c"], original[..]);
-    dropped.borrow_mut().clear();
+    dropped.reset();
     drop(original);
-    dropped.borrow_mut().sort_unstable();
     // Dropped the original's items
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
-    dropped.borrow_mut().clear();
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    dropped.reset();
     drop(clone);
     // And dropped the clone's items
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["b", "c", "d"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn into_iter_basic() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -173,21 +167,21 @@ fn into_iter_basic() {
     ]);
     let mut iter = slice.into_iter();
     // Just calling into_iter doesn't drop anything
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     assert_eq!("a", iter.next().unwrap());
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!("b", iter.next().unwrap());
-    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "b"], dropped.get_items()[..]);
     assert_eq!("c", iter.next().unwrap());
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
     assert_eq!("d", iter.next().unwrap());
-    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.get_items()[..]);
     assert!(iter.next().is_none());
 }
 
 #[test]
 fn into_iter_partial_iteration() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -196,19 +190,18 @@ fn into_iter_partial_iteration() {
     ]);
     let mut iter = slice.into_iter();
     assert_eq!("a", iter.next().unwrap());
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!("b", iter.next().unwrap());
-    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "b"], dropped.get_items()[..]);
     assert_eq!(2, iter.len());
     drop(iter);
     // Dropping the iterator drops the rest of the items
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn into_iter_double_ended() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -217,13 +210,13 @@ fn into_iter_double_ended() {
     ]);
     let mut iter = slice.into_iter();
     assert_eq!("a", iter.next().unwrap());
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!("d", iter.next_back().unwrap());
-    assert_eq!(["a", "d"], dropped.borrow()[..]);
+    assert_eq!(["a", "d"], dropped.get_items()[..]);
     assert_eq!("b", iter.next().unwrap());
-    assert_eq!(["a", "d", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "d", "b"], dropped.get_items()[..]);
     assert_eq!("c", iter.next_back().unwrap());
-    assert_eq!(["a", "d", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "d", "b", "c"], dropped.get_items()[..]);
     assert!(iter.next().is_none());
     assert!(iter.next_back().is_none());
 }
@@ -257,7 +250,7 @@ fn rc_slice_mut_iter_as_mut_slice() {
 
 #[test]
 fn rc_slice_mut_iter_split_off_from() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -272,28 +265,28 @@ fn rc_slice_mut_iter_split_off_from() {
     // Split off last item
     let mut split = iter.split_off_from(3);
     assert_eq!(1, split.len());
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     assert_eq!("d", split.next().unwrap());
-    assert_eq!(["d"], dropped.borrow()[..]);
+    assert_eq!(["d"], dropped.get_items()[..]);
     assert!(split.next().is_none());
     // Assert current contents of iterator
     assert_eq!(["a", "b", "c"], iter.as_slice());
     assert_eq!("c", iter.next_back().unwrap());
-    assert_eq!(["d", "c"], dropped.borrow()[..]);
+    assert_eq!(["d", "c"], dropped.get_items()[..]);
     // Split off last 2 items, i.e. whole remaining iterator
     let mut split = iter.split_off_from(0);
     assert_eq!(0, iter.len());
     assert!(iter.next().is_none());
     assert_eq!(["a", "b"], split.as_slice());
     assert_eq!("b", split.next_back().unwrap());
-    assert_eq!(["d", "c", "b"], dropped.borrow()[..]);
+    assert_eq!(["d", "c", "b"], dropped.get_items()[..]);
     assert_eq!("a", split.next_back().unwrap());
-    assert_eq!(["d", "c", "b", "a"], dropped.borrow()[..]);
+    assert_eq!(["d", "c", "b", "a"], dropped.get_items()[..]);
 }
 
 #[test]
 fn rc_slice_mut_iter_split_off_to() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -308,23 +301,23 @@ fn rc_slice_mut_iter_split_off_to() {
     // Split off first item
     let mut split = iter.split_off_to(1);
     assert_eq!(1, split.len());
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     assert_eq!("a", split.next().unwrap());
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert!(split.next().is_none());
     // Assert current contents of iterator
     assert_eq!(["b", "c", "d"], iter.as_slice());
     assert_eq!("b", iter.next().unwrap());
-    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "b"], dropped.get_items()[..]);
     // Split off first 2 items, i.e. whole remaining iterator
     let mut split = iter.split_off_to(2);
     assert_eq!(0, iter.len());
     assert!(iter.next().is_none());
     assert_eq!(["c", "d"], split.as_slice());
     assert_eq!("c", split.next().unwrap());
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
     assert_eq!("d", split.next().unwrap());
-    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -345,7 +338,7 @@ fn rc_slice_mut_iter_split_off_to_out_of_bounds() {
 
 #[test]
 fn split_into_parts_basic() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -358,28 +351,28 @@ fn split_into_parts_basic() {
     ]);
     let mut parts = RcSliceMut::split_into_parts(slice, 8);
     assert_eq!(["a"], parts.next().unwrap()[..]);
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!(["b"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "b"], dropped.get_items()[..]);
     assert_eq!(["c"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
     assert_eq!(["d"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.get_items()[..]);
     assert_eq!(["e"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c", "d", "e"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e"], dropped.get_items()[..]);
     assert_eq!(["f"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c", "d", "e", "f"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f"], dropped.get_items()[..]);
     assert_eq!(["g"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g"], dropped.get_items()[..]);
     assert_eq!(["h"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_items()[..]);
     // We've now yielded the last subslice
     assert!(parts.next().is_none());
 }
 
 #[test]
 fn split_into_parts_partial_iteration() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSliceMut::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -392,20 +385,19 @@ fn split_into_parts_partial_iteration() {
     ]);
     let mut parts = RcSliceMut::split_into_parts(slice, 8);
     assert_eq!(["a"], parts.next().unwrap()[..]);
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!(["b"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "b"], dropped.get_items()[..]);
     assert_eq!(["c"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
     assert_eq!(["d"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "b", "c", "d"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d"], dropped.get_items()[..]);
     // End iteration early. Dropping the iterator should drop the
     // remaining items.
     drop(parts);
     // sort to avoid asserting on the order individual items within
     // the iterator are dropped.
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
 }
 
 #[test]

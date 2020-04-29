@@ -4,31 +4,28 @@ extern crate rc_slice;
 mod test_utils;
 
 use std::{
-    cell::RefCell,
     collections::hash_map::HashMap,
 };
 
 use rc_slice::RcSlice;
-use test_utils::DropTracker;
+use test_utils::{DroppedItems, DropTracker};
 
 is_covariant!(RcSlice);
 
 #[test]
 fn drops_its_data() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
         DropTracker("c", &dropped),
     ]);
-
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn drops_only_when_no_strong_refs() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -37,15 +34,14 @@ fn drops_only_when_no_strong_refs() {
     let clone = slice.clone();
     drop(clone);
     // Still 0 even after clone is dropped
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     drop(slice);
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
-fn drops_when_subs_dropped() {
-    let dropped = RefCell::new(Vec::new());
+fn drops_when_children_dropped() {
+    let dropped = DroppedItems::new();
     let mut slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -53,11 +49,9 @@ fn drops_when_subs_dropped() {
     ]);
     RcSlice::split_off_left(&mut slice);
     // We should've dropped the 1 item from the left subslice
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_sorted()[..]);
     drop(slice);
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
@@ -93,7 +87,7 @@ fn split_into_parts() {
     // A single test of many methods of RcSliceParts. Finer-grained unit
     // tests of the underlying implementation can be found in
     // src/internal/bin_parts_iter.rs.
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -110,36 +104,33 @@ fn split_into_parts() {
     assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], parts.as_slice());
 
     assert_eq!(["a"], parts.next().unwrap()[..]);
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!(7, parts.len());
     assert_eq!(["b", "c", "d", "e", "f", "g", "h"], parts.as_slice());
 
     assert_eq!(["h"], parts.next_back().unwrap()[..]);
-    assert_eq!(["a", "h"], dropped.borrow()[..]);
+    assert_eq!(["a", "h"], dropped.get_items()[..]);
     assert_eq!(6, parts.len());
     assert_eq!(["b", "c", "d", "e", "f", "g"], parts.as_slice());
 
     assert_eq!(["g"], parts.next_back().unwrap()[..]);
-    assert_eq!(["a", "h", "g"], dropped.borrow()[..]);
+    assert_eq!(["a", "h", "g"], dropped.get_items()[..]);
     assert_eq!(5, parts.len());
     assert_eq!(["b", "c", "d", "e", "f"], parts.as_slice());
 
     assert_eq!(["b"], parts.next().unwrap()[..]);
-    assert_eq!(["a", "h", "g", "b"], dropped.borrow()[..]);
+    assert_eq!(["a", "h", "g", "b"], dropped.get_items()[..]);
     assert_eq!(4, parts.len());
     assert_eq!(["c", "d", "e", "f"], parts.as_slice());
 
     // Drop the iterator early
     drop(parts);
-    // sort to avoid asserting on the order individual items within
-    // the iterator are dropped.
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
 }
 
 #[test]
 fn clone_rc_slice_parts() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -147,7 +138,7 @@ fn clone_rc_slice_parts() {
     ]);
     let mut parts = RcSlice::split_into_parts(slice, 2);
     assert_eq!(["a"], parts.next().unwrap()[..]);
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!(1, parts.len());
 
     let mut clone = parts.clone();
@@ -155,11 +146,10 @@ fn clone_rc_slice_parts() {
     assert_eq!(1, clone.len());
     assert_eq!(["b", "c"], parts.next().unwrap()[..]);
     // We haven't dropped the righthand items yet since we cloned the iterator.
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!(["b", "c"], clone.next().unwrap()[..]);
     // Now we've dropped
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }
 
 #[test]
@@ -242,7 +232,7 @@ fn downgrade_then_upgrade() {
 
 #[test]
 fn downgrade_lets_slice_get_dropped() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -252,14 +242,13 @@ fn downgrade_lets_slice_get_dropped() {
 
     drop(slice);
 
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
     assert!(weak_slice.upgrade().is_none());
 }
 
 #[test]
 fn downgrade_child_then_upgrade() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let parent = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -270,7 +259,7 @@ fn downgrade_child_then_upgrade() {
 
     drop(child);
     // Nothing dropped b/c parent still alive.
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     // And fact that parent is still alive is enough that weak_child
     // should be upgradeable.
     assert!(weak_child.upgrade().is_some());
@@ -278,7 +267,7 @@ fn downgrade_child_then_upgrade() {
 
 #[test]
 fn downgrade_parent_then_upgrade() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let parent = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -290,8 +279,7 @@ fn downgrade_parent_then_upgrade() {
     drop(parent);
 
     // Dropped left half b/c we dropped the parent
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a"], dropped.borrow()[..]);
+    assert_eq!(["a"], dropped.get_sorted()[..]);
     // And weak_parent is no longer upgradeable, b/c to upgrade we need
     // to be able to recover the WHOLE subslice.
     assert!(weak_parent.upgrade().is_none());
@@ -359,7 +347,7 @@ fn into_mut_tolerates_weak_slices() {
 
 #[test]
 fn into_mut_doesnt_drop() {
-    let dropped = RefCell::new(Vec::new());
+    let dropped = DroppedItems::new();
     let slice = RcSlice::from_vec(vec![
         DropTracker("a", &dropped),
         DropTracker("b", &dropped),
@@ -369,12 +357,11 @@ fn into_mut_doesnt_drop() {
     // RcSliceData::forget_items.
     RcSlice::clone_left(&RcSlice::clone_right(&slice));
     RcSlice::clone_left(&slice);
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     let slice_mut = RcSlice::into_mut(slice).unwrap();
     // Not dropped yet
-    assert_eq!(0, dropped.borrow().len());
+    assert_eq!(0, dropped.get_items().len());
     drop(slice_mut);
     // Now items are dropped
-    dropped.borrow_mut().sort_unstable();
-    assert_eq!(["a", "b", "c"], dropped.borrow()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
 }

@@ -142,21 +142,34 @@ impl<T> ArcSliceData<T> {
             // swap into place.
             let alloc = if len == 0 { None } else { self.alloc.clone() };
             let new_child = Arc::new(Self::with_data_and_parent(ptr, len, alloc, Arc::downgrade(self)));
-            let clone = new_child.clone();
+            let new_child_clone = new_child.clone();
             let new_child = Arc::into_raw(new_child);
             let prev_child = child.compare_and_swap(ptr::null_mut(), new_child as _, Ordering::AcqRel);
             if prev_child.is_null() {
                 // Swapping new child in succeeded. Return clone of new child.
-                clone
+                new_child_clone
             } else {
                 // Uh oh! Failed to swap in new child. We must've just lost a race
                 // to clone this child. prev_child is the child that just won the race.
                 let prev_child = Arc::from_raw(prev_child as *const Self);
-                let clone = prev_child.clone();
+                let prev_child_clone = prev_child.clone();
                 mem::forget(prev_child);
-                // Reconstitute our new_child in order to drop it
-                Arc::from_raw(new_child);
-                clone
+                // Reconstitute our new_child in order to drop it....
+                let new_child = Arc::from_raw(new_child);
+                // But careful! We need to set our new_child's len to 0 to avoid our
+                // Drop impl mistakenly dropping whatever items we *thought* our
+                // new_child was gonna share ownership of....
+                // Drop the clone of new_child we made above so our try_unwrap succeeds....
+                drop(new_child_clone);
+                // Then unwrap new_child so we can modify its len.
+                match Arc::try_unwrap(new_child) {
+                    Ok(mut new_child) => new_child.len = 0,
+                    // Unreachable b/c we never successfully linked new_child to a parent,
+                    // so we couldn't have possibly made any other clones of it.
+                    Err(_) => unreachable!()
+                };
+                // And finally return our clone of prev_child
+                prev_child_clone
             }
         } else {
             // Observed the child ptr as being non-null. Just clone the underlying Arc.
@@ -241,6 +254,27 @@ impl<T> Drop for ArcSliceData<T> {
         unsafe { ptr::drop_in_place(slice::from_raw_parts_mut(p.as_ptr(), len)); }
     }
 }
+
+// Implementing Send and Sync for ArcSliceData<T> --
+//
+// We'll more or less think of ArcSliceData<T> as yet another container
+// that can hold some T's, like Vec<T>, [T], or our SliceItems<T>. So it
+// makes sense to require that T be Send for ArcSliceData<T> to be Send
+// and that T be Sync for ArcSliceData<T> to be Sync. The one extra
+// wrinkle is that ArcSliceData<T> can share ownership of its T's w/
+// other ArcSliceDatas. So it makes sense to say that if you're gonna
+// send an ArcSliceData<T> to another thread, you and that thread better
+// be able to share references to some T's. I.e. we'll also require that
+// T be Sync for ArcSliceData<T> to be Send.
+//
+// In the end, this is all a little academic: Our public structs only
+// hold an ArcSliceData<T> as either an Arc<ArcSliceData<T>> or a
+// Weak<ArcSliceData<T>>. So as long as you need T: Send + Sync to get
+// ArcSliceData<T> to be both Send and Sync, then we'll need T: Send +
+// Sync to get either ArcSlice<T> Send or ArcSlice<T> Sync (or ditto
+// for WeakSlice<T>). Which is all we ultimately care about.
+unsafe impl<T: Send + Sync> Send for ArcSliceData<T> { }
+unsafe impl<T: Sync> Sync for ArcSliceData<T> { }
 
 impl<T> Deref for ArcSliceData<T> {
     type Target = [T];
