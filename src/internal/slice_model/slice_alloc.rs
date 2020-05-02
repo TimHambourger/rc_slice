@@ -3,7 +3,6 @@ use alloc::vec::Vec;
 
 /// A struct that owns the underlying allocation for a slice but owns
 /// none of the items in the slice.
-#[derive(Debug)]
 pub struct SliceAlloc<T> {
     ptr: NonNull<T>,
     len: usize,

@@ -21,7 +21,6 @@ use crate::{
 };
 
 /// A unique reference to a subslice of a reference counted slice.
-#[derive(Debug)]
 pub struct RcSliceMut<T> {
     items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
@@ -29,13 +28,11 @@ pub struct RcSliceMut<T> {
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
 
-#[derive(Debug)]
 pub struct RcSliceMutIter<T> {
     iter: SliceItemsIter<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
 
-#[derive(Debug)]
 pub struct RcSliceMutParts<T> {
     iter: SliceItemsParts<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
@@ -162,6 +159,7 @@ impl<T> IntoIterator for RcSliceMut<T> {
 
 borrow_as_slice!(RcSliceMut);
 borrow_mut_as_slice!(RcSliceMut);
+debug_as_slice!(RcSliceMut);
 compare_as_slice!(RcSliceMut);
 hash_as_slice!(RcSliceMut);
 from_iter_via_vec!(RcSliceMut);
@@ -232,6 +230,8 @@ impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
 
 impl<T> FusedIterator for RcSliceMutIter<T> { }
 
+debug_as_items_iter!(RcSliceMutIter);
+
 impl<T> RcSliceMutParts<T> {
     #[inline]
     pub fn as_slice(&self) -> &[T] { self.iter.as_slice() }
@@ -279,3 +279,5 @@ impl<T> DoubleEndedIterator for RcSliceMutParts<T> {
 }
 
 impl<T> FusedIterator for RcSliceMutParts<T> { }
+
+debug_as_parts_iter!(RcSliceMutParts);

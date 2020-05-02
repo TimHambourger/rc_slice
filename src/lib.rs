@@ -1,12 +1,8 @@
 #![deny(rust_2018_idioms)]
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
-
-#[cfg(test)]
-#[macro_use]
-extern crate std;
 
 #[macro_use]
 mod internal;

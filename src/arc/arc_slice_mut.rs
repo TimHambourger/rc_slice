@@ -20,7 +20,6 @@ use crate::{
     arc::arc_slice::{ArcSlice, ArcSliceData},
 };
 
-#[derive(Debug)]
 pub struct ArcSliceMut<T> {
     items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
@@ -28,13 +27,11 @@ pub struct ArcSliceMut<T> {
     alloc: Option<Arc<SliceAlloc<T>>>,
 }
 
-#[derive(Debug)]
 pub struct ArcSliceMutIter<T> {
     iter: SliceItemsIter<T>,
     alloc: Option<Arc<SliceAlloc<T>>>,
 }
 
-#[derive(Debug)]
 pub struct ArcSliceMutParts<T> {
     iter: SliceItemsParts<T>,
     alloc: Option<Arc<SliceAlloc<T>>>,
@@ -148,6 +145,7 @@ impl<T> IntoIterator for ArcSliceMut<T> {
 
 borrow_as_slice!(ArcSliceMut);
 borrow_mut_as_slice!(ArcSliceMut);
+debug_as_slice!(ArcSliceMut);
 compare_as_slice!(ArcSliceMut);
 hash_as_slice!(ArcSliceMut);
 from_iter_via_vec!(ArcSliceMut);
@@ -215,6 +213,8 @@ impl<T> DoubleEndedIterator for ArcSliceMutIter<T> {
 
 impl<T> FusedIterator for ArcSliceMutIter<T> { }
 
+debug_as_items_iter!(ArcSliceMutIter);
+
 impl<T> ArcSliceMutParts<T> {
     #[inline]
     pub fn as_slice(&self) -> &[T] { self.iter.as_slice() }
@@ -262,3 +262,5 @@ impl<T> DoubleEndedIterator for ArcSliceMutParts<T> {
 }
 
 impl<T> FusedIterator for ArcSliceMutParts<T> { }
+
+debug_as_parts_iter!(ArcSliceMutParts);

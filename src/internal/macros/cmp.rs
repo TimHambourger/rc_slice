@@ -1,4 +1,3 @@
-#[macro_export]
 macro_rules! compare_as_slice {
     ($struct:ident) => {
         impl<A, B> core::cmp::PartialEq<$struct<B>> for $struct<A> where A: core::cmp::PartialEq<B> {

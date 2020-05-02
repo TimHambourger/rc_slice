@@ -24,7 +24,6 @@ use crate::{
 // Relationships btwn ArcSlice, ArcSliceData, and DataGuard mirror those
 // from crate::rc.
 
-#[derive(Debug)]
 pub (in crate::arc) struct ArcSliceData<T> {
     ptr: NonNull<T>,
     len: usize,
@@ -48,7 +47,6 @@ pub (in crate::arc) struct ArcSliceData<T> {
 
 /// Signals the presence of child ArcSlices or WeakSlices for the same
 /// data subslice. Part of detecting which mutations are possible.
-#[derive(Debug)]
 struct DataGuard {
     // Not used except in the fact that a child DataGuard keeps its parent
     // DataGuard alive.
@@ -61,7 +59,6 @@ struct DataGuard {
 
 /// An atomically reference counted slice that tracks reference counts
 /// per subslice.
-#[derive(Debug)]
 pub struct ArcSlice<T> {
     data: Arc<ArcSliceData<T>>,
     data_guard: Arc<DataGuard>,
@@ -69,7 +66,6 @@ pub struct ArcSlice<T> {
 
 /// A weak reference to an atomically reference counted slice. Comparable
 /// to std::sync::Weak<[T]>.
-#[derive(Debug)]
 pub struct WeakSlice<T> {
     data: Weak<ArcSliceData<T>>,
     // Not used except as part of signaling the presence of WeakSlices to ArcSlice:;get_mut
@@ -77,7 +73,6 @@ pub struct WeakSlice<T> {
 }
 
 /// A double-ended iterator over roughly-even subslices of a starting ArcSlice.
-#[derive(Debug)]
 pub struct ArcSliceParts<T> {
     iter: BinaryPartsIter<ArcSlice<T>>,
 }
@@ -461,6 +456,7 @@ impl<T> From<ArcSliceMut<T>> for ArcSlice<T> {
 
 borrow_as_slice!(ArcSlice);
 compare_as_slice!(ArcSlice);
+debug_as_slice!(ArcSlice);
 hash_as_slice!(ArcSlice);
 from_iter_via_vec!(ArcSlice);
 
@@ -532,3 +528,5 @@ impl<T> Clone for ArcSliceParts<T> {
         Self { iter: self.iter.clone() }
     }
 }
+
+debug_as_parts_iter!(ArcSliceParts);

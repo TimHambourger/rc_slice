@@ -124,6 +124,12 @@ fn hash_hashes_as_slice() {
 }
 
 #[test]
+fn debug_debugs_as_slice() {
+    let slice = RcSliceMut::from_vec(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(format!("{:?}", &[0, 1, 2, 3, 4, 5, 6, 7]), format!("{:?}", slice));
+}
+
+#[test]
 fn can_collect() {
     let a = [0, 1, 2, 3, 4];
     let slice: RcSliceMut<_> = a.iter().copied().collect();
@@ -334,6 +340,14 @@ fn rc_slice_mut_iter_split_off_to_out_of_bounds() {
     let slice = RcSliceMut::from_vec(vec![10, 20, 30, 40]);
     let mut iter = slice.into_iter();
     iter.split_off_to(5);
+}
+
+#[test]
+fn debug_rc_slice_mut_iter() {
+    let slice = RcSliceMut::from_vec(vec![10, 20, 30, 40]);
+    let iter = slice.into_iter();
+    println!("iter = {:?}", iter);
+    assert!(format!("{:?}", iter).contains("RcSliceMutIter"));
 }
 
 #[test]
@@ -610,4 +624,12 @@ fn rc_slice_mut_parts_as_mut_slice() {
     assert_eq!([30, 40, 70], parts.as_slice()[..]);
     assert_eq!([30, 40, 70], parts.next_back().unwrap()[..]);
     assert_eq!(0, parts.len());
+}
+
+#[test]
+fn debug_rc_slice_mut_parts() {
+    let slice = RcSliceMut::from_vec(vec![0, 5, 10, 15, 20]);
+    let parts = RcSliceMut::split_into_parts(slice, 2);
+    println!("parts = {:?}", parts);
+    assert!(format!("{:?}", parts).contains("RcSliceMutParts"));
 }

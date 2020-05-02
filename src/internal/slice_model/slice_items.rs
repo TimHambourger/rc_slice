@@ -9,21 +9,18 @@ use core::{
 
 /// A struct that uniquely owns the items in some subslice of an underlying
 /// slice but does not own the allocation for the underlying slice.
-#[derive(Debug)]
 pub struct SliceItems<T> {
     ptr: NonNull<T>,
     len: usize,
     phantom: PhantomData<T>,
 }
 
-#[derive(Debug)]
 pub struct SliceItemsIter<T> {
     start: NonNull<T>,
     end: NonNull<T>,
     phantom: PhantomData<T>,
 }
 
-#[derive(Debug)]
 pub struct SliceItemsParts<T> {
     orig_ptr: NonNull<T>,
     orig_len: usize,

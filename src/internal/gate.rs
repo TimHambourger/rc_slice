@@ -1,12 +1,10 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// A simple syncrhonization primitive.
-#[derive(Debug)]
 pub struct Gate {
     is_closed: AtomicBool,
 }
 
-#[derive(Debug)]
 pub struct Latch<'a>(&'a Gate);
 
 impl Gate {

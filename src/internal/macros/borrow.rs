@@ -1,4 +1,3 @@
-#[macro_export]
 macro_rules! borrow_as_slice {
     ($struct: ident) => {
         impl<T> core::convert::AsRef<[T]> for $struct<T> {
@@ -13,7 +12,6 @@ macro_rules! borrow_as_slice {
     };
 }
 
-#[macro_export]
 macro_rules! borrow_mut_as_slice {
     ($struct:ident) => {
         impl<T> core::convert::AsMut<[T]> for $struct<T> {

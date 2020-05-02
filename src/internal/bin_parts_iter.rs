@@ -17,7 +17,7 @@ pub trait BinarySplitOff {
 
 /// An iterator over parts of an initial whole. Parts are obtained by repeatedly
 /// splitting off left or right halves.
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct BinaryPartsIter<S> {
     num_parts: usize,
     num_yielded_front: usize,
@@ -305,17 +305,6 @@ fn greatest_power_of_2_factor(mut n: usize) -> usize {
 }
 
 impl<S: BinarySplitOff> FusedIterator for BinaryPartsIter<S> { }
-
-impl<S: Clone> Clone for BinaryPartsIter<S> {
-    fn clone(&self) -> Self {
-        Self {
-            num_parts: self.num_parts,
-            num_yielded_front: self.num_yielded_front,
-            num_yielded_back: self.num_yielded_back,
-            deque: self.deque.clone(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod test {

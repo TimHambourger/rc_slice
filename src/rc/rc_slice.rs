@@ -50,7 +50,6 @@ use crate::{
 // whether it holds the only strong ref to its DataGuard as a way of
 // checking whether its data has any still-living descendants.
 
-#[derive(Debug)]
 pub (in crate::rc) struct RcSliceData<T> {
     ptr: NonNull<T>,
     len: usize,
@@ -71,7 +70,6 @@ pub (in crate::rc) struct RcSliceData<T> {
 
 /// Signals the presence of child RcSlices or WeakSlices for the same
 /// data subslice. Part of detecting which mutations are possible.
-#[derive(Debug)]
 struct DataGuard {
     // Not used except in the fact that a child DataGuard keeps its
     // parent DataGuard alive.
@@ -80,7 +78,6 @@ struct DataGuard {
 
 /// A reference counted slice that tracks reference counts per
 /// subslice.
-#[derive(Debug)]
 pub struct RcSlice<T> {
     data: Rc<RcSliceData<T>>,
     data_guard: Rc<DataGuard>,
@@ -88,7 +85,6 @@ pub struct RcSlice<T> {
 
 /// A weak reference to a reference counted slice. Comparable to
 /// std::rc::Weak<[T]>.
-#[derive(Debug)]
 pub struct WeakSlice<T> {
     data: Weak<RcSliceData<T>>,
     // Not used except as part of signaling the presence of WeakSlices to RcSlice::get_mut
@@ -96,7 +92,6 @@ pub struct WeakSlice<T> {
 }
 
 /// A double-ended iterator over roughly-even subslices of a starting RcSlice.
-#[derive(Debug)]
 pub struct RcSliceParts<T> {
     iter: BinaryPartsIter<RcSlice<T>>,
 }
@@ -398,6 +393,7 @@ impl<T> From<RcSliceMut<T>> for RcSlice<T> {
 
 borrow_as_slice!(RcSlice);
 compare_as_slice!(RcSlice);
+debug_as_slice!(RcSlice);
 hash_as_slice!(RcSlice);
 from_iter_via_vec!(RcSlice);
 
@@ -486,3 +482,5 @@ impl<T> Clone for RcSliceParts<T> {
         Self { iter: self.iter.clone() }
     }
 }
+
+debug_as_parts_iter!(RcSliceParts);

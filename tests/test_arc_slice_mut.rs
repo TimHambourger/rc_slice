@@ -129,6 +129,12 @@ fn hash_hashes_as_slice() {
 }
 
 #[test]
+fn debug_debugs_as_slice() {
+    let slice = ArcSliceMut::from_vec(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(format!("{:?}", &[0, 1, 2, 3, 4, 5, 6, 7]), format!("{:?}", slice));
+}
+
+#[test]
 fn can_collect() {
     let a = [0, 1, 2, 3, 4];
     let slice: ArcSliceMut<_> = a.iter().copied().collect();
@@ -213,7 +219,7 @@ fn arc_slice_mut_iter_as_mut_slice_across_threads() {
 
 #[test]
 #[should_panic(expected = "at <=")]
-fn rc_slice_mut_iter_split_off_from_out_of_bounds() {
+fn arc_slice_mut_iter_split_off_from_out_of_bounds() {
     let slice = ArcSliceMut::from_vec(vec![10, 20, 30, 40]);
     let mut iter = slice.into_iter();
     iter.split_off_from(5);
@@ -221,10 +227,18 @@ fn rc_slice_mut_iter_split_off_from_out_of_bounds() {
 
 #[test]
 #[should_panic(expected = "at <=")]
-fn rc_slice_mut_iter_split_off_to_out_of_bounds() {
+fn arc_slice_mut_iter_split_off_to_out_of_bounds() {
     let slice = ArcSliceMut::from_vec(vec![10, 20, 30, 40]);
     let mut iter = slice.into_iter();
     iter.split_off_to(5);
+}
+
+#[test]
+fn debug_arc_slice_mut_iter() {
+    let slice = ArcSliceMut::from_vec(vec![10, 20, 30, 40]);
+    let iter = slice.into_iter();
+    println!("iter = {:?}", iter);
+    assert!(format!("{:?}", iter).contains("ArcSliceMutIter"));
 }
 
 #[test]
@@ -280,4 +294,12 @@ fn arc_slice_mut_parts_as_mut_slice() {
     assert_eq!([30, 40, 70], parts.as_slice()[..]);
     assert_eq!([30, 40, 70], parts.next_back().unwrap()[..]);
     assert_eq!(0, parts.len());
+}
+
+#[test]
+fn debug_arc_slice_mut_parts() {
+    let slice = ArcSliceMut::from_vec(vec![0, 5, 10, 15, 20]);
+    let parts = ArcSliceMut::split_into_parts(slice, 2);
+    println!("parts = {:?}", parts);
+    assert!(format!("{:?}", parts).contains("ArcSliceMutParts"));
 }

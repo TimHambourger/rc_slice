@@ -153,6 +153,14 @@ fn clone_rc_slice_parts() {
 }
 
 #[test]
+fn debug_rc_slice_parts() {
+    let slice = RcSlice::from_vec(vec![0, 5, 10, 15, 20]);
+    let parts = RcSlice::split_into_parts(slice, 2);
+    println!("parts = {:?}", parts);
+    assert!(format!("{:?}", parts).contains("RcSliceParts"));
+}
+
+#[test]
 fn get_mut_allows_mutation() {
     let mut slice = RcSlice::from_vec(vec![0, 1, 2, 3]);
     RcSlice::get_mut(&mut slice).unwrap()[0] = 4;
@@ -214,6 +222,12 @@ fn hash_hashes_as_slice() {
     assert_eq!("the slice", map.get(&left).unwrap());
     assert_eq!("the slice", map.get(&[0, 2, 1, 5] as &[_]).unwrap());
     assert!(map.get(&[0, 2, 1] as &[_]).is_none());
+}
+
+#[test]
+fn debug_debugs_as_slice() {
+    let slice = RcSlice::from_vec(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(format!("{:?}", &[0, 1, 2, 3, 4, 5, 6, 7]), format!("{:?}", slice));
 }
 
 #[test]

@@ -1,4 +1,3 @@
-#[macro_export]
 macro_rules! from_iter_via_vec {
     ($struct:ident) => {
         impl<T> core::iter::FromIterator<T> for $struct<T> {
@@ -9,7 +8,6 @@ macro_rules! from_iter_via_vec {
     };
 }
 
-#[macro_export]
 macro_rules! exact_size_hint {
     () => {
         fn size_hint(&self) -> (usize, Option<usize>) {
