@@ -12,6 +12,7 @@ use alloc::{
 };
 use crate::{
     internal::slice_model::{
+        self,
         SliceAlloc,
         SliceItems,
         SliceItemsIter,
@@ -21,6 +22,7 @@ use crate::{
 };
 
 pub struct ArcSliceMut<T> {
+    // Ditto RcSliceMut re this field ordering being significant for drop ordering
     items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
     // don't need an underlying allocation.
@@ -28,11 +30,13 @@ pub struct ArcSliceMut<T> {
 }
 
 pub struct ArcSliceMutIter<T> {
+    // Ditto RcSliceMut re this field ordering being significant for drop ordering
     iter: SliceItemsIter<T>,
     alloc: Option<Arc<SliceAlloc<T>>>,
 }
 
 pub struct ArcSliceMutParts<T> {
+    // Ditto RcSliceMut re this field ordering being significant for drop ordering
     iter: SliceItemsParts<T>,
     alloc: Option<Arc<SliceAlloc<T>>>,
 }
@@ -40,13 +44,8 @@ pub struct ArcSliceMutParts<T> {
 impl<T> ArcSliceMut<T> {
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
         assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
-        let len = slice.len();
-        unsafe {
-            // Waiting on stabilization of Box::into_raw_non_null
-            let ptr = NonNull::new_unchecked(Box::into_raw(slice) as _);
-            let alloc = if len == 0 { None } else { Some(Arc::new(SliceAlloc::new(ptr, len))) };
-            Self::from_raw_parts(ptr, len, alloc)
-        }
+        let (items, alloc) = unsafe { slice_model::split_alloc_from_items(slice) };
+        Self { items, alloc: alloc.map(Arc::new) }
     }
 
     pub fn from_vec(vec: Vec<T>) -> Self {

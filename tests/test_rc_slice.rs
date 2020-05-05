@@ -20,7 +20,7 @@ fn drops_its_data() {
         DropTracker("b", &dropped),
         DropTracker("c", &dropped),
     ]);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn drops_only_when_no_strong_refs() {
     // Still 0 even after clone is dropped
     assert_eq!(0, dropped.get_items().len());
     drop(slice);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -49,9 +49,9 @@ fn drops_when_children_dropped() {
     ]);
     RcSlice::split_off_left(&mut slice);
     // We should've dropped the 1 item from the left subslice
-    assert_eq!(["a"], dropped.get_sorted()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     drop(slice);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn split_into_parts() {
 
     // Drop the iterator early
     drop(parts);
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "h", "g", "b", "c", "d", "e", "f"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn clone_rc_slice_parts() {
     assert_eq!(["a"], dropped.get_items()[..]);
     assert_eq!(["b", "c"], clone.next().unwrap()[..]);
     // Now we've dropped
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn downgrade_lets_slice_get_dropped() {
 
     drop(slice);
 
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
     assert!(weak_slice.upgrade().is_none());
 }
 
@@ -293,7 +293,7 @@ fn downgrade_parent_then_upgrade() {
     drop(parent);
 
     // Dropped left half b/c we dropped the parent
-    assert_eq!(["a"], dropped.get_sorted()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     // And weak_parent is no longer upgradeable, b/c to upgrade we need
     // to be able to recover the WHOLE subslice.
     assert!(weak_parent.upgrade().is_none());
@@ -377,5 +377,5 @@ fn into_mut_doesnt_drop() {
     assert_eq!(0, dropped.get_items().len());
     drop(slice_mut);
     // Now items are dropped
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }

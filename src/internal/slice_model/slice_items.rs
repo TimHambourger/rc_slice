@@ -351,3 +351,447 @@ impl<T> Drop for SliceItemsParts<T> {
         unsafe { ptr::drop_in_place(self.as_mut_slice()); }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::internal::slice_model::{self, SliceAlloc};
+    use super::SliceItems;
+
+    // Like slice_model::split_alloc_from_items but returns the tuple elements
+    // in the opposite order so that items will be dropped before alloc when
+    // destructuring the return value. This accounts for a quirk in Rust's drop
+    // order, which is that dropping of tuple elements (and struct fields and
+    // many other things) is FIFO, but dropping of local variables is LIFO.
+    // See https://github.com/rust-lang/rfcs/blob/master/text/1857-stabilize-drop-order.md
+    unsafe fn alloc_and_items_for_destructuring<T>(slice: Box<[T]>) -> (Option<SliceAlloc<T>>, SliceItems<T>) {
+        let (items, alloc) = slice_model::split_alloc_from_items(slice);
+        (alloc, items)
+    }
+
+    #[test]
+    fn slice_items_iter_basic() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        assert_eq!("a", iter.next().unwrap());
+        assert_eq!("b", iter.next().unwrap());
+        assert_eq!("c", iter.next().unwrap());
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn slice_items_iter_double_ended() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        assert_eq!("a", iter.next().unwrap());
+        assert_eq!("d", iter.next_back().unwrap());
+        assert_eq!("b", iter.next().unwrap());
+        assert_eq!("c", iter.next_back().unwrap());
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn slice_items_iter_as_slice() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        assert_eq!(["a", "b", "c", "d"], iter.as_slice());
+        iter.next();
+        assert_eq!(["b", "c", "d"], iter.as_slice());
+        iter.next_back();
+        assert_eq!(["b", "c"], iter.as_slice());
+        iter.next_back();
+        assert_eq!(["b"], iter.as_slice());
+        iter.next_back();
+        assert_eq!(0, iter.as_slice().len());
+    }
+
+    #[test]
+    fn slice_items_iter_as_mut_slice() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        iter.as_mut_slice()[0] = "x".to_string();
+        assert_eq!(["x", "b", "c", "d"], iter.as_slice());
+        assert_eq!("x", iter.next().unwrap());
+        iter.as_mut_slice()[2] = "y".to_string();
+        assert_eq!(["b", "c", "y"], iter.as_slice());
+        assert_eq!("y", iter.next_back().unwrap());
+        iter.as_mut_slice()[1] = "z".to_string();
+        assert_eq!(["b", "z"], iter.as_slice());
+        assert_eq!("b", iter.next().unwrap());
+        assert_eq!("z", iter.next().unwrap());
+    }
+
+    #[test]
+    fn slice_items_iter_split_off_from() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        // Test a trivial split first: split off last 0 items
+        let mut split = iter.split_off_from(4);
+        assert_eq!(0, split.len());
+        assert!(split.next().is_none());
+        // Split off last item
+        let mut split = iter.split_off_from(3);
+        assert_eq!(1, split.len());
+        assert_eq!("d", split.next().unwrap());
+        assert!(split.next().is_none());
+        // Assert current contents of iterator
+        assert_eq!(["a", "b", "c"], iter.as_slice());
+        assert_eq!("c", iter.next_back().unwrap());
+        // Split off last 2 items, i.e. whole remaining iterator
+        let mut split = iter.split_off_from(0);
+        assert_eq!(0, iter.len());
+        assert!(iter.next().is_none());
+        assert_eq!(["a", "b"], split.as_slice());
+        assert_eq!("b", split.next_back().unwrap());
+        assert_eq!("a", split.next_back().unwrap());
+    }
+
+    #[test]
+    fn slice_items_iter_split_off_to() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        // Test a trivial split first: split off first 0 items
+        let mut split = iter.split_off_to(0);
+        assert_eq!(0, split.len());
+        assert!(split.next().is_none());
+        // Split off first item
+        let mut split = iter.split_off_to(1);
+        assert_eq!(1, split.len());
+        assert_eq!("a", split.next().unwrap());
+        assert!(split.next().is_none());
+        // Assert current contents of iterator
+        assert_eq!(["b", "c", "d"], iter.as_slice());
+        assert_eq!("b", iter.next().unwrap());
+        // Split off first 2 items, i.e. whole remaining iterator
+        let mut split = iter.split_off_to(2);
+        assert_eq!(0, iter.len());
+        assert!(iter.next().is_none());
+        assert_eq!(["c", "d"], split.as_slice());
+        assert_eq!("c", split.next().unwrap());
+        assert_eq!("d", split.next().unwrap());
+    }
+
+    #[test]
+    #[should_panic(expected = "at <=")]
+    fn slice_items_iter_split_off_from_out_of_bounds() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        iter.split_off_from(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "at <=")]
+    fn slice_items_iter_split_off_to_out_of_bounds() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        iter.split_off_to(4);
+    }
+
+    #[test]
+    fn slice_items_parts_basic() {
+        let v = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+            "f".to_string(),
+            "g".to_string(),
+            "h".to_string(),
+        ];
+        let (items, _alloc) = unsafe { slice_model::split_alloc_from_items(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(8);
+        assert_eq!(["a"], parts.next().unwrap()[..]);
+        assert_eq!(["b"], parts.next().unwrap()[..]);
+        assert_eq!(["c"], parts.next().unwrap()[..]);
+        assert_eq!(["d"], parts.next().unwrap()[..]);
+        assert_eq!(["e"], parts.next().unwrap()[..]);
+        assert_eq!(["f"], parts.next().unwrap()[..]);
+        assert_eq!(["g"], parts.next().unwrap()[..]);
+        assert_eq!(["h"], parts.next().unwrap()[..]);
+        assert!(parts.next().is_none());
+    }
+
+    #[test]
+    fn slice_items_parts_double_ended() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+
+        // All possible "walks" (sequences of next/next_back calls) for a split
+        // into 4 parts, excluding the walk consisting purely of next calls,
+        // since we have other tests that focus just on forward iteration.
+        // 2 ^ 4 - 1 = 15 different walks.
+
+        // Walk #1: next, next, next, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #2: next, next, next_back, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #3: next, next, next_back, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #4: next, next_back, next, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #5: next, next_back, next, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #6: next, next_back, next_back, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #7: next, next_back, next_back, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #8: next_back, next, next, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #9: next_back, next, next, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #10: next_back, next, next_back, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #11: next_back, next, next_back, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #12: next_back, next_back, next, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #13: next_back, next_back, next, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert_eq!(["b"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #14: next_back, next_back, next_back, next
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+
+        // Walk #15: next_back, next_back, next_back, next_back
+        {
+            let v = v.clone();
+            let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+            let mut parts = items.split_into_parts(4);
+            assert_eq!(["d"], parts.next_back().unwrap()[..]);
+            assert_eq!(["c"], parts.next_back().unwrap()[..]);
+            assert_eq!(["b"], parts.next_back().unwrap()[..]);
+            assert_eq!(["a"], parts.next_back().unwrap()[..]);
+            assert!(parts.next().is_none());
+            assert!(parts.next_back().is_none());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "power of 2")]
+    fn split_into_parts_not_power_of_2() {
+        let v = vec![0];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        items.split_into_parts(56);
+    }
+
+    #[test]
+    #[should_panic(expected = "> 0")]
+    fn split_into_zero_parts() {
+        let v = vec![0];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        items.split_into_parts(0);
+    }
+
+    #[test]
+    fn slice_items_parts_as_slice() {
+        // Also use this as a test of num_parts > 8.
+        let mut v = Vec::with_capacity(32);
+        for i in 0..32 { v.push(i); }
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(32);
+        assert_eq!(32, parts.as_slice().len());
+        assert_eq!([0, 1, 2, 3, 4, 5], parts.as_slice()[..6]);
+        assert_eq!([26, 27, 28, 29, 30, 31], parts.as_slice()[26..]);
+        assert_eq!([0], parts.next().unwrap()[..]);
+        assert_eq!(31, parts.as_slice().len());
+        assert_eq!([1, 2, 3, 4, 5, 6], parts.as_slice()[..6]);
+        assert_eq!([27, 28, 29, 30, 31], parts.as_slice()[26..]);
+        assert_eq!([31], parts.next_back().unwrap()[..]);
+        assert_eq!(30, parts.as_slice().len());
+        assert_eq!([1, 2, 3, 4, 5, 6], parts.as_slice()[..6]);
+        assert_eq!([27, 28, 29, 30], parts.as_slice()[26..]);
+        assert_eq!([30], parts.next_back().unwrap()[..]);
+        assert_eq!(29, parts.as_slice().len());
+        assert_eq!([1, 2, 3, 4, 5, 6], parts.as_slice()[..6]);
+        assert_eq!([27, 28, 29], parts.as_slice()[26..]);
+        assert_eq!([1], parts.next().unwrap()[..]);
+        assert_eq!(28, parts.as_slice().len());
+        assert_eq!([2, 3, 4, 5, 6, 7], parts.as_slice()[..6]);
+        assert_eq!([28, 29], parts.as_slice()[26..]);
+        assert_eq!([29], parts.next_back().unwrap()[..]);
+        assert_eq!(27, parts.as_slice().len());
+        assert_eq!([2, 3, 4, 5, 6, 7], parts.as_slice()[..6]);
+        assert_eq!([28], parts.as_slice()[26..]);
+        assert_eq!([28], parts.next_back().unwrap()[..]);
+        assert_eq!(26, parts.as_slice().len());
+        assert_eq!([2, 3, 4, 5, 6, 7], parts.as_slice()[..6]);
+        assert_eq!([25, 26, 27], parts.as_slice()[23..]);
+        assert_eq!([2], parts.next().unwrap()[..]);
+        assert_eq!(25, parts.as_slice().len());
+        assert_eq!([3, 4, 5, 6, 7, 8], parts.as_slice()[..6]);
+        assert_eq!([26, 27], parts.as_slice()[23..]);
+    }
+
+    #[test]
+    fn slice_items_parts_as_mut_slice() {
+        let v = vec![10, 20, 30, 40, 50];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(2);
+        parts.as_mut_slice()[0] = 60;
+        assert_eq!([60, 20, 30, 40, 50], parts.as_slice());
+        assert_eq!([60, 20], parts.next().unwrap()[..]);
+        parts.as_mut_slice()[2] = 70;
+        assert_eq!([30, 40, 70], parts.as_slice()[..]);
+        assert_eq!([30, 40, 70], parts.next_back().unwrap()[..]);
+        assert_eq!(0, parts.len());
+    }
+}

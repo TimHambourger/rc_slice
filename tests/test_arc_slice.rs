@@ -23,7 +23,7 @@ fn drops_data_across_threads() {
         assert_eq!(["a", "b", "c"], slice[..]);
     });
     handle.join().unwrap();
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn drops_only_when_no_strong_refs() {
     handle.join().unwrap();
     assert_eq!(0, dropped.get_items().len());
     drop(slice);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -61,9 +61,9 @@ fn drops_when_children_dropped() {
         assert!(dropped2.get_items().contains(&"a"));
     });
     handle.join().unwrap();
-    assert_eq!(["a"], dropped.get_sorted()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     drop(slice);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn parallel_split_into_parts_drop_at_end() {
     assert_eq!(0, dropped.get_items().len());
     drop(slice);
     // Now we've dropped
-    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -140,5 +140,6 @@ fn parallel_split_into_parts_parallel_drop() {
         handle.join().unwrap();
     }
     // Now by the time all threads have completed, everything should be dropped.
+    // Exact drop order is nondeterministic b/c of the parallelism above.
     assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
 }

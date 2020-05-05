@@ -27,15 +27,6 @@ impl DroppedItems {
         self.0.borrow().clone()
     }
 
-    /// Get a sorted vector of all items currently in the collection.
-    /// The collection is cloned before sorting. The underlying
-    /// collection is not modified.
-    pub fn get_sorted(&self) -> Vec<&'static str> {
-        let mut d = self.get_items();
-        d.sort_unstable();
-        d
-    }
-
     pub fn reset(&self) {
         self.0.borrow_mut().clear();
     }

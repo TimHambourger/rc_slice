@@ -12,6 +12,7 @@ use alloc::{
 };
 use crate::{
     internal::slice_model::{
+        self,
         SliceAlloc,
         SliceItems,
         SliceItemsIter,
@@ -22,6 +23,9 @@ use crate::{
 
 /// A unique reference to a subslice of a reference counted slice.
 pub struct RcSliceMut<T> {
+    // Note: Ordering alloc field last so it gets dropped after items, to
+    // avoid read-after-free dropping items.
+    // See https://github.com/rust-lang/rfcs/blob/master/text/1857-stabilize-drop-order.md
     items: SliceItems<T>,
     // An Option b/c we'll let this be None for length zero sublices. They
     // don't need an underlying allocation.
@@ -29,11 +33,13 @@ pub struct RcSliceMut<T> {
 }
 
 pub struct RcSliceMutIter<T> {
+    // Ditto RcSliceMut re this field ordering being significant for drop ordering
     iter: SliceItemsIter<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
 
 pub struct RcSliceMutParts<T> {
+    // Ditto RcSliceMut re this field ordering being significant for drop ordering
     iter: SliceItemsParts<T>,
     alloc: Option<Rc<SliceAlloc<T>>>,
 }
@@ -41,13 +47,8 @@ pub struct RcSliceMutParts<T> {
 impl<T> RcSliceMut<T> {
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
         assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
-        let len = slice.len();
-        unsafe {
-            // Waiting on stabilization of Box::into_raw_non_null
-            let ptr = NonNull::new_unchecked(Box::into_raw(slice) as _);
-            let alloc = if len == 0 { None } else { Some(Rc::new(SliceAlloc::new(ptr, len))) };
-            Self::from_raw_parts(ptr, len, alloc)
-        }
+        let (items, alloc) = unsafe { slice_model::split_alloc_from_items(slice) };
+        Self { items, alloc: alloc.map(Rc::new) }
     }
 
     pub fn from_vec(vec: Vec<T>) -> Self {

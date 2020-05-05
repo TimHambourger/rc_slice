@@ -24,7 +24,7 @@ fn drops_data_across_threads() {
         assert_eq!(["a", "b", "c"], slice[..]);
     });
     handle.join().unwrap();
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -41,9 +41,9 @@ fn split_off_left_across_threads() {
     });
     assert_eq!(["b", "c"], slice[..]);
     handle.join().unwrap();
-    assert_eq!(["a"], dropped.get_sorted()[..]);
+    assert_eq!(["a"], dropped.get_items()[..]);
     drop(slice);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
 }
 
 #[test]
@@ -60,9 +60,9 @@ fn split_off_right_across_threads() {
     });
     assert_eq!(["a"], slice[..]);
     handle.join().unwrap();
-    assert_eq!(["b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["b", "c"], dropped.get_items()[..]);
     drop(slice);
-    assert_eq!(["a", "b", "c"], dropped.get_sorted()[..]);
+    assert_eq!(["b", "c", "a"], dropped.get_items()[..]);
 }
 
 
@@ -180,6 +180,7 @@ fn into_iter_across_threads() {
     assert!(iter1.next_back().is_none());
     handle1.join().unwrap();
     handle2.join().unwrap();
+    // The exact drop order is nondeterministic due to the parallelism above
     assert_eq!(["a", "b", "c", "d", "e", "f", "g", "h"], dropped.get_sorted()[..]);
 }
 
@@ -215,22 +216,6 @@ fn arc_slice_mut_iter_as_mut_slice_across_threads() {
     drop(iter);
     // Now we've dropped "b" too
     assert_eq!(&"b", dropped.get_items().last().unwrap());
-}
-
-#[test]
-#[should_panic(expected = "at <=")]
-fn arc_slice_mut_iter_split_off_from_out_of_bounds() {
-    let slice = ArcSliceMut::from_vec(vec![10, 20, 30, 40]);
-    let mut iter = slice.into_iter();
-    iter.split_off_from(5);
-}
-
-#[test]
-#[should_panic(expected = "at <=")]
-fn arc_slice_mut_iter_split_off_to_out_of_bounds() {
-    let slice = ArcSliceMut::from_vec(vec![10, 20, 30, 40]);
-    let mut iter = slice.into_iter();
-    iter.split_off_to(5);
 }
 
 #[test]
