@@ -61,7 +61,7 @@ pub struct BinaryPartsIter<S> {
 /// // Assertion: left starts at previous starting pointer
 /// assert_eq!(old_ptr, (*left).as_ptr());
 /// // Assertion: s now starts at previous starting pointer offset by length of left
-/// assert_eq!(unsafe { old_ptr.offset((*left).len() as isize) }, (*s).as_ptr());
+/// assert_eq!(unsafe { old_ptr.add((*left).len()) }, (*s).as_ptr());
 /// ```
 ///
 /// #4
@@ -72,7 +72,7 @@ pub struct BinaryPartsIter<S> {
 /// // Assertion: s still starts at previous starting pointer
 /// assert_eq!(old_ptr, (*s).as_ptr());
 /// // Right starts at previous starting pointer offset by new length of s
-/// assert_eq!(unsafe { old_ptr.offset((*s).len() as isize) }, (*right).as_ptr());
+/// assert_eq!(unsafe { old_ptr.add((*s).len()) }, (*right).as_ptr());
 /// ```
 ///
 /// `SplitAsSlice<T>` is unsafe to implement because BinaryPartsIter<S>::as_slice
@@ -128,13 +128,18 @@ impl<S> BinaryPartsIter<S> {
     {
         if 0 == self.len() {
             unsafe { slice::from_raw_parts(NonNull::dangling().as_ptr(), 0) }
+        } else if mem::size_of::<T>() == 0 {
+            // For ZSTs, we can't use start and end pointers to compute a
+            // length, so we instead sum up the lengths of the slices in
+            // our deque.
+            let len = self.deque.iter().map(|s| s.len()).sum();
+            unsafe { slice::from_raw_parts(NonNull::dangling().as_ptr(), len) }
         } else {
-            // TODO: Support ZSTs
             let start = self.deque.front()
                 .map(|slice| slice.as_ptr())
                 .expect("deque is nonempty when BinaryPartsIter not done iterating");
             let end = self.deque.back()
-                .map(|slice| unsafe { slice.as_ptr().offset(slice.len() as isize) })
+                .map(|slice| unsafe { slice.as_ptr().add(slice.len()) })
                 .expect("deque is nonempty when BinaryPartsIter not done iterating");
             let len = (end as usize - start as usize) / mem::size_of::<T>();
             unsafe { slice::from_raw_parts(start, len) }
@@ -261,6 +266,7 @@ impl<S: BinarySplitOff> Iterator for BinaryPartsIter<S> {
     }
 
     exact_size_hint!();
+    exact_count!();
 }
 
 impl<S: BinarySplitOff> DoubleEndedIterator for BinaryPartsIter<S> {
@@ -636,6 +642,21 @@ mod test {
         assert_eq!([5], parts.as_slice());
         assert_eq!(SliceWrapper(&[5]), parts.next().unwrap());
         assert_eq!(0, parts.len());
+        assert_eq!(0, parts.as_slice().len());
+    }
+
+    #[test]
+    fn as_slice_zst() {
+        let slice = SliceWrapper(&[(); 6]);
+        let mut parts = BinaryPartsIter::new(slice, 4);
+        assert_eq!(6, parts.as_slice().len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(4, parts.as_slice().len());
+        assert_eq!(1, parts.next().unwrap().len());
+        assert_eq!(3, parts.as_slice().len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(1, parts.as_slice().len());
+        assert_eq!(1, parts.next_back().unwrap().len());
         assert_eq!(0, parts.as_slice().len());
     }
 }

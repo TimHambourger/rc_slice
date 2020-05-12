@@ -6,6 +6,7 @@ use core::{
     ptr::{self, NonNull},
     slice,
 };
+use zst_utils::PtrOrIdxRange;
 
 /// A struct that uniquely owns the items in some subslice of an underlying
 /// slice but does not own the allocation for the underlying slice.
@@ -16,8 +17,7 @@ pub struct SliceItems<T> {
 }
 
 pub struct SliceItemsIter<T> {
-    start: NonNull<T>,
-    end: NonNull<T>,
+    range: PtrOrIdxRange<T>,
     phantom: PhantomData<T>,
 }
 
@@ -40,7 +40,6 @@ impl<T> SliceItems<T> {
     /// - Calling code MUST guarantee that this struct uniquely owns the
     /// items in the indicated subslice.
     pub unsafe fn new(ptr: NonNull<T>, len: usize) -> Self {
-        assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
         Self { ptr, len, phantom: PhantomData }
     }
 
@@ -75,8 +74,11 @@ impl<T> SliceItems<T> {
     }
 
     fn mid(&self) -> NonNull<T> {
-        // TODO: Support ZSTs
-        unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len >> 1) as isize)) }
+        if mem::size_of::<T>() == 0 {
+            self.ptr
+        } else {
+            unsafe { NonNull::new_unchecked(self.ptr.as_ptr().add(self.len >> 1)) }
+        }
     }
 
     pub fn split_into_parts(self, num_parts: usize) -> SliceItemsParts<T> {
@@ -122,34 +124,38 @@ impl<T> IntoIterator for SliceItems<T> {
 
 impl<T> SliceItemsIter<T> {
     fn new(slice_items: SliceItems<T>) -> Self {
-        // TODO: support ZSTs
-        let start = slice_items.ptr;
-        let end = unsafe { NonNull::new_unchecked(start.as_ptr().offset(slice_items.len as isize)) };
+        let range = unsafe { PtrOrIdxRange::with_ptr_and_len(slice_items.ptr, slice_items.len) };
         mem::forget(slice_items);
-        Self { start, end, phantom: PhantomData }
+        Self { range, phantom: PhantomData }
     }
 
     pub fn as_slice(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.start.as_ptr(), self.len()) }
+        unsafe { self.range.as_slice() }
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        unsafe { slice::from_raw_parts_mut(self.start.as_ptr(), self.len()) }
+        unsafe { self.range.as_mut_slice() }
     }
 
     pub fn split_off_from(&mut self, at: usize) -> Self {
         assert!(at <= self.len(), "at <= self.len(): {} <= {}", at, self.len());
-        let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
-        let split = Self { start: split_pt, end: self.end, phantom: PhantomData };
-        self.end = split_pt;
+        let split_pt = unsafe { self.range.start.add(at) };
+        let split = Self {
+            range: PtrOrIdxRange { start: split_pt, end: self.range.end },
+            phantom: PhantomData,
+        };
+        self.range.end = split_pt;
         split
     }
 
     pub fn split_off_to(&mut self, at: usize) -> Self {
         assert!(at <= self.len(), "at <= self.len(): {} <= {}", at, self.len());
-        let split_pt = unsafe { NonNull::new_unchecked(self.start.as_ptr().offset(at as isize)) };
-        let split = Self { start: self.start, end: split_pt, phantom: PhantomData };
-        self.start = split_pt;
+        let split_pt = unsafe { self.range.start.add(at) };
+        let split = Self {
+            range: PtrOrIdxRange { start: self.range.start, end: split_pt },
+            phantom: PhantomData,
+        };
+        self.range.start = split_pt;
         split
     }
 }
@@ -161,10 +167,7 @@ unsafe impl<T: Sync> Sync for SliceItemsIter<T> { }
 
 impl<T> ExactSizeIterator for SliceItemsIter<T> {
     #[inline]
-    fn len(&self) -> usize {
-        // TODO: support ZSTs
-        (self.end.as_ptr() as usize - self.start.as_ptr() as usize) / mem::size_of::<T>()
-    }
+    fn len(&self) -> usize { self.range.len() }
 }
 
 impl<T> Iterator for SliceItemsIter<T> {
@@ -173,8 +176,8 @@ impl<T> Iterator for SliceItemsIter<T> {
     fn next(&mut self) -> Option<T> {
         if self.len() > 0 {
             unsafe {
-                let read = ptr::read(self.start.as_ptr());
-                self.start = NonNull::new_unchecked(self.start.as_ptr().offset(1));
+                let read = self.range.start.read();
+                self.range.start = self.range.start.add(1);
                 Some(read)
             }
         } else {
@@ -183,14 +186,15 @@ impl<T> Iterator for SliceItemsIter<T> {
     }
 
     exact_size_hint!();
+    exact_count!();
 }
 
 impl<T> DoubleEndedIterator for SliceItemsIter<T> {
     fn next_back(&mut self) -> Option<T> {
         if self.len() > 0 {
             unsafe {
-                self.end = NonNull::new_unchecked(self.end.as_ptr().offset(-1));
-                Some(ptr::read(self.end.as_ptr()))
+                self.range.end = self.range.end.sub(1);
+                Some(self.range.end.read())
             }
         } else {
             None
@@ -233,14 +237,12 @@ impl<T> SliceItemsParts<T> {
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         let (data, len) = self.as_raw_slice_parts();
-        unsafe { slice::from_raw_parts_mut(data, len) }
+        unsafe { slice::from_raw_parts_mut(data as _, len) }
     }
 
-    fn as_raw_slice_parts(&self) -> (*mut T, usize) {
+    fn as_raw_slice_parts(&self) -> (*const T, usize) {
         if self.len() > 0 {
-            // TODO: Support ZSTs
-            let mut start = self.orig_ptr.as_ptr();
-            let mut end = unsafe { start.offset(self.orig_len as isize) };
+            let mut range = unsafe { PtrOrIdxRange::with_ptr_and_len(self.orig_ptr, self.orig_len) };
 
             // Refine start based on num_yielded_front
             let mut len = self.orig_len;
@@ -249,7 +251,7 @@ impl<T> SliceItemsParts<T> {
                 if self.num_yielded_front & mask == 0 {
                     len = len >> 1;
                 } else {
-                    start = unsafe { start.offset((len >> 1) as isize) };
+                    range.start = unsafe { range.start.add(len >> 1) };
                     len = len - (len >> 1);
                 }
                 mask >>= 1;
@@ -262,14 +264,14 @@ impl<T> SliceItemsParts<T> {
                 if self.num_yielded_back & mask == 0 {
                     len = len - (len >> 1);
                 } else {
-                    end = unsafe { end.offset(-((len - (len >> 1)) as isize)) };
+                    range.end = unsafe { range.end.sub(len - (len >> 1)) };
                     len = len >> 1;
                 }
                 mask >>= 1;
             }
 
-            let len = (end as usize - start as usize) / mem::size_of::<T>();
-            (start, len)
+            let len = range.len();
+            (range.start.as_ptr(), len)
         } else {
             (NonNull::dangling().as_ptr(), 0)
         }
@@ -302,8 +304,11 @@ impl<T> Iterator for SliceItemsParts<T> {
                 if self.num_yielded_front & mask == 0 {
                     len = len >> 1;
                 } else {
-                    // TODO: Support ZSTs
-                    ptr = unsafe { ptr.offset((len >> 1) as isize) };
+                    ptr = if mem::size_of::<T>() == 0 {
+                        ptr
+                    } else {
+                        unsafe { ptr.add(len >> 1) }
+                    };
                     len = len - (len >> 1);
                 }
                 mask >>= 1;
@@ -315,6 +320,7 @@ impl<T> Iterator for SliceItemsParts<T> {
     }
 
     exact_size_hint!();
+    exact_count!();
 }
 
 impl<T> DoubleEndedIterator for SliceItemsParts<T> {
@@ -329,8 +335,11 @@ impl<T> DoubleEndedIterator for SliceItemsParts<T> {
             while mask > 0 {
                 // Note that the two branches of this conditional are reversed compared to next(...).
                 if self.num_yielded_back & mask == 0 {
-                    // TODO: Support ZSTs
-                    ptr = unsafe { ptr.offset((len >> 1) as isize) };
+                    ptr = if mem::size_of::<T>() == 0 {
+                        ptr
+                    } else {
+                        unsafe { ptr.add(len >> 1) }
+                    };
                     len = len - (len >> 1);
                 } else {
                     len = len >> 1;
@@ -352,6 +361,131 @@ impl<T> Drop for SliceItemsParts<T> {
     }
 }
 
+mod zst_utils {
+    // NOTE: The whole approach used here is adapted from vec's IntoIter,
+    // minus use of the internal arith_offset function for pointers to
+    // ZSTs. See https://doc.rust-lang.org/std/vec/struct.IntoIter.html
+    // and follow link from there to src.
+
+    use core::{
+        mem,
+        ptr::{self, NonNull},
+        slice,
+    };
+
+    /// A value that represents either a) a valid, properly aligned,
+    /// non-null pointer to a type of size > 0, or b) a usize index into
+    /// a slice of ZSTs.
+    #[derive(Debug)]
+    pub struct PtrOrIdx<T>(*const T);
+
+    /// A subslice of some initial slice delimited either by start and end
+    /// pointers (for types of size > 0) or by start and end indices (for
+    /// ZSTs).
+    #[derive(Debug)]
+    pub struct PtrOrIdxRange<T> {
+        pub start: PtrOrIdx<T>,
+        pub end: PtrOrIdx<T>,
+    }
+
+    impl<T> PtrOrIdx<T> {
+        #[inline]
+        pub fn as_ptr(self) -> *const T {
+            if mem::size_of::<T>() == 0 {
+                NonNull::dangling().as_ptr()
+            } else {
+                self.0
+            }
+        }
+
+        #[inline]
+        pub fn as_mut_ptr(self) -> *mut T {
+            self.as_ptr() as _
+        }
+
+        #[inline]
+        pub unsafe fn read(self) -> T {
+            if mem::size_of::<T>() == 0 {
+                mem::zeroed()
+            } else {
+                ptr::read(self.0)
+            }
+        }
+
+        #[inline]
+        pub unsafe fn add(self, count: usize) -> Self {
+            if mem::size_of::<T>() == 0 {
+                Self((self.0 as usize + count) as _)
+            } else {
+                Self(self.0.add(count))
+            }
+        }
+
+        #[inline]
+        pub unsafe fn sub(self, count: usize) -> Self {
+            if mem::size_of::<T>() == 0 {
+                Self((self.0 as usize - count) as _)
+            } else {
+                Self(self.0.sub(count))
+            }
+        }
+    }
+
+    impl<T> Copy for PtrOrIdx<T> { }
+    impl<T> Clone for PtrOrIdx<T> {
+        #[inline]
+        fn clone(&self) -> Self { *self }
+    }
+
+    impl<T> PtrOrIdxRange<T> {
+        /// Construct a `PtrOrIdxRange` comprising the entire slice indicated
+        /// by the given start pointer and length.
+        /// Safety: Unsafe b/c in the case that mem::size_of::<T>() > 0, calling
+        /// code must guarantee that `ptr` is a valid, properly aligned pointer
+        /// to a slice of T's of length at least `len`. This guarantee is unneeded
+        /// if T is a ZST.
+        #[inline]
+        pub unsafe fn with_ptr_and_len(ptr: NonNull<T>, len: usize) -> Self {
+            if mem::size_of::<T>() == 0 {
+                Self { start: PtrOrIdx(0 as _), end: PtrOrIdx(len as _) }
+            } else {
+                let ptr = ptr.as_ptr();
+                // Safety: As long as calling code adheres to the safety guarantees
+                // in the comment above, the pointer `add` below is safe for the same
+                // reasons it's safe in the impl of, say, [T]'s as_ptr_range.
+                // See https://doc.rust-lang.org/std/primitive.slice.html#method.as_ptr_range
+                // and follow link from there to src.
+                Self { start: PtrOrIdx(ptr), end: PtrOrIdx(ptr.add(len)) }
+            }
+        }
+
+        #[inline]
+        pub fn len(self) -> usize {
+            if mem::size_of::<T>() == 0 {
+                self.end.0 as usize - self.start.0 as usize
+            } else {
+                (self.end.0 as usize - self.start.0 as usize) / mem::size_of::<T>()
+            }
+        }
+
+        #[inline]
+        pub unsafe fn as_slice<'a>(self) -> &'a [T] {
+            slice::from_raw_parts(self.start.as_ptr(), self.len())
+        }
+
+        #[inline]
+        pub unsafe fn as_mut_slice<'a>(self) -> &'a mut [T] {
+            slice::from_raw_parts_mut(self.start.as_mut_ptr(), self.len())
+        }
+    }
+
+    impl<T> Copy for PtrOrIdxRange<T> { }
+    impl<T> Clone for PtrOrIdxRange<T> {
+        #[inline]
+        fn clone(&self) -> Self { *self }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::internal::slice_model::{self, SliceAlloc};
@@ -366,6 +500,61 @@ mod test {
     unsafe fn alloc_and_items_for_destructuring<T>(slice: Box<[T]>) -> (Option<SliceAlloc<T>>, SliceItems<T>) {
         let (items, alloc) = slice_model::split_alloc_from_items(slice);
         (alloc, items)
+    }
+
+    #[test]
+    fn split_off_left() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (_alloc, mut items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let left = items.split_off_left();
+        assert_eq!(["a"], left[..]);
+        assert_eq!(["b", "c"], items[..]);
+    }
+
+    #[test]
+    fn split_off_right() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let (_alloc, mut items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let right = items.split_off_right();
+        assert_eq!(["a", "b"], items[..]);
+        assert_eq!(["c", "d"], right[..]);
+    }
+
+    #[test]
+    fn split_off_left_zst() {
+        let v = vec![(); 6];
+        let (_alloc, mut items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let left = items.split_off_left();
+        assert_eq!(3, left.len());
+        assert_eq!(3, items.len());
+    }
+
+    #[test]
+    fn split_off_right_zst() {
+        let v = vec![(); 5];
+        let (_alloc, mut items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let right = items.split_off_right();
+        assert_eq!(2, items.len());
+        assert_eq!(3, right.len());
+    }
+
+    #[test]
+    fn deref_and_deref_mut() {
+        let v = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (_alloc, mut items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        assert_eq!("b", items[1]);
+        items[1] = "x".to_string();
+        assert_eq!("x", items[1]);
+    }
+
+    #[test]
+    fn deref_and_deref_mut_zst() {
+        let v = vec![(); 5];
+        let (_alloc, mut items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        assert_eq!(5, items.len());
+        // Mutating a ZST is fundamentally pointless, but we should still be able to do it
+        items[1] = ();
+        assert_eq!(5, items.len());
     }
 
     #[test]
@@ -390,6 +579,26 @@ mod test {
         assert_eq!("c", iter.next_back().unwrap());
         assert!(iter.next().is_none());
         assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn slice_items_iter_zst() {
+        let v = vec![(); 5];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        assert_eq!(5, iter.len());
+        iter.next().unwrap();
+        assert_eq!(4, iter.len());
+        iter.next_back().unwrap();
+        assert_eq!(3, iter.len());
+        iter.next_back().unwrap();
+        assert_eq!(2, iter.len());
+        iter.next().unwrap();
+        assert_eq!(1, iter.len());
+        iter.next().unwrap();
+        assert_eq!(0, iter.len());
+        assert!(iter.next_back().is_none());
+        assert!(iter.next().is_none());
     }
 
     #[test]
@@ -423,6 +632,22 @@ mod test {
         assert_eq!(["b", "z"], iter.as_slice());
         assert_eq!("b", iter.next().unwrap());
         assert_eq!("z", iter.next().unwrap());
+    }
+
+    #[test]
+    fn slice_items_iter_as_mut_slice_zst() {
+        let v = vec![(); 5];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        assert_eq!(5, iter.as_slice().len());
+        iter.next().unwrap();
+        assert_eq!(4, iter.as_slice().len());
+        iter.next_back().unwrap();
+        assert_eq!(3, iter.as_slice().len());
+        // Again, mutating a ZST is fundamentally pointless, but still should be able to
+        iter.as_mut_slice()[2] = ();
+        assert_eq!(3, iter.as_slice().len());
+        assert_eq!(3, iter.as_mut_slice().len());
     }
 
     #[test]
@@ -496,6 +721,80 @@ mod test {
     }
 
     #[test]
+    fn slice_items_split_off_from_zst() {
+        let v = vec![(); 5];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        // Test a trivial split first: split off last 0 items
+        let mut split = iter.split_off_from(5);
+        assert_eq!(0, split.len());
+        assert_eq!(0, split.as_slice().len());
+        assert!(split.next().is_none());
+        // Split off last 2 items
+        let mut split = iter.split_off_from(3);
+        assert_eq!(2, split.len());
+        assert_eq!(2, split.as_slice().len());
+        split.next().unwrap();
+        assert_eq!(1, split.len());
+        assert_eq!(1, split.as_slice().len());
+        split.next_back().unwrap();
+        assert_eq!(0, split.len());
+        assert_eq!(0, split.as_slice().len());
+        assert!(split.next().is_none());
+        // Assert current contents of iterator
+        assert_eq!(3, iter.as_slice().len());
+        // Split off last 3 items, i.e. whole remaining iterator
+        let mut split = iter.split_off_from(0);
+        assert_eq!(0, iter.len());
+        assert!(iter.next().is_none());
+        assert_eq!(3, split.len());
+        assert_eq!(3, split.as_slice().len());
+        split.next_back().unwrap();
+        assert_eq!(2, split.len());
+        assert_eq!(2, split.as_slice().len());
+        split.next().unwrap();
+        assert_eq!(1, split.len());
+        assert_eq!(1, split.as_slice().len());
+    }
+
+    #[test]
+    fn slice_items_split_off_to_zst() {
+        let v = vec![(); 5];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut iter = items.into_iter();
+        // Test a trivial split first: split off first 0 items
+        let mut split = iter.split_off_to(0);
+        assert_eq!(0, split.len());
+        assert_eq!(0, split.as_slice().len());
+        assert!(split.next().is_none());
+        // Split off first 2 items
+        let mut split = iter.split_off_to(2);
+        assert_eq!(2, split.len());
+        assert_eq!(2, split.as_slice().len());
+        split.next_back().unwrap();
+        assert_eq!(1, split.len());
+        assert_eq!(1, split.as_slice().len());
+        split.next().unwrap();
+        assert_eq!(0, split.len());
+        assert_eq!(0, split.as_slice().len());
+        assert!(split.next_back().is_none());
+        // Assert current contentx of iterator
+        assert_eq!(3, iter.as_slice().len());
+        // Split off first 3 items, i.e. whole remaining iterator
+        let mut split = iter.split_off_to(3);
+        assert_eq!(0, iter.len());
+        assert!(iter.next_back().is_none());
+        assert_eq!(3, split.len());
+        assert_eq!(3, split.as_slice().len());
+        split.next().unwrap();
+        assert_eq!(2, split.len());
+        assert_eq!(2, split.as_slice().len());
+        split.next_back().unwrap();
+        assert_eq!(1, split.len());
+        assert_eq!(1, split.as_slice().len());
+    }
+
+    #[test]
     fn slice_items_parts_basic() {
         let v = vec![
             "a".to_string(),
@@ -507,7 +806,7 @@ mod test {
             "g".to_string(),
             "h".to_string(),
         ];
-        let (items, _alloc) = unsafe { slice_model::split_alloc_from_items(v.into_boxed_slice()) };
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
         let mut parts = items.split_into_parts(8);
         assert_eq!(["a"], parts.next().unwrap()[..]);
         assert_eq!(["b"], parts.next().unwrap()[..]);
@@ -726,6 +1025,50 @@ mod test {
     }
 
     #[test]
+    fn slice_items_parts_zst() {
+        // Test a random "walk" of next/next_back calls for splitting a
+        // slice of ZSTs into 16 parts.
+        let v = vec![(); 32];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(16);
+        assert_eq!(16, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(15, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(14, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(13, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(12, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(11, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(10, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(9, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(8, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(7, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(6, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(5, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(4, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(3, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(2, parts.len());
+        assert_eq!(2, parts.next_back().unwrap().len());
+        assert_eq!(1, parts.len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(0, parts.len());
+        assert!(parts.next().is_none());
+        assert!(parts.next_back().is_none());
+    }
+
+    #[test]
     #[should_panic(expected = "power of 2")]
     fn split_into_parts_not_power_of_2() {
         let v = vec![0];
@@ -782,6 +1125,59 @@ mod test {
     }
 
     #[test]
+    fn slice_items_parts_len_and_as_slice_len() {
+        // Illustrate the relationship btwn .len() and .as_slice().len().
+        let v = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+            "f".to_string(),
+            "g".to_string(),
+            "h".to_string(),
+            "i".to_string(),
+        ];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(4);
+        assert_eq!(4, parts.len());
+        assert_eq!(9, parts.as_slice().len());
+        assert_eq!(["a", "b"], parts.next().unwrap()[..]);
+        assert_eq!(3, parts.len());
+        assert_eq!(7, parts.as_slice().len());
+        assert_eq!(["c", "d"], parts.next().unwrap()[..]);
+        assert_eq!(2, parts.len());
+        assert_eq!(5, parts.as_slice().len());
+        assert_eq!(["e", "f"], parts.next().unwrap()[..]);
+        assert_eq!(1, parts.len());
+        assert_eq!(3, parts.as_slice().len());
+        assert_eq!(["g", "h", "i"], parts.next().unwrap()[..]);
+        assert_eq!(0, parts.len());
+        assert_eq!(0, parts.as_slice().len());
+    }
+
+    #[test]
+    fn slice_items_parts_len_and_as_slice_len_zst() {
+        let v = vec![(); 10];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(4);
+        assert_eq!(4, parts.len());
+        assert_eq!(10, parts.as_slice().len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(3, parts.len());
+        assert_eq!(8, parts.as_slice().len());
+        assert_eq!(3, parts.next().unwrap().len());
+        assert_eq!(2, parts.len());
+        assert_eq!(5, parts.as_slice().len());
+        assert_eq!(2, parts.next().unwrap().len());
+        assert_eq!(1, parts.len());
+        assert_eq!(3, parts.as_slice().len());
+        assert_eq!(3, parts.next().unwrap().len());
+        assert_eq!(0, parts.len());
+        assert_eq!(0, parts.as_slice().len());
+    }
+
+    #[test]
     fn slice_items_parts_as_mut_slice() {
         let v = vec![10, 20, 30, 40, 50];
         let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
@@ -793,5 +1189,21 @@ mod test {
         assert_eq!([30, 40, 70], parts.as_slice()[..]);
         assert_eq!([30, 40, 70], parts.next_back().unwrap()[..]);
         assert_eq!(0, parts.len());
+    }
+
+    #[test]
+    fn slice_items_parts_as_mut_slice_zst() {
+        let v = vec![(); 5];
+        let (_alloc, items) = unsafe { alloc_and_items_for_destructuring(v.into_boxed_slice()) };
+        let mut parts = items.split_into_parts(2);
+        assert_eq!(5, parts.as_mut_slice().len());
+        // And confirm we can do a pointless update.
+        parts.as_mut_slice()[4] = ();
+        assert_eq!(5, parts.as_mut_slice().len());
+        parts.next().unwrap();
+        assert_eq!(3, parts.as_mut_slice().len());
+        // And another pointless update.
+        parts.as_mut_slice()[2] = ();
+        assert_eq!(3, parts.as_mut_slice().len());
     }
 }

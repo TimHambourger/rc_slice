@@ -98,7 +98,6 @@ pub struct RcSliceParts<T> {
 
 impl<T> RcSliceData<T> {
     fn from_boxed_slice(slice: Box<[T]>) -> Self {
-        assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
         let len = slice.len();
         unsafe {
             // Waiting on stabilization of Box::into_raw_non_null
@@ -183,8 +182,12 @@ impl<T> RcSliceData<T> {
     }
 
     fn right_sub(&self) -> (NonNull<T>, usize) {
-        // TODO: Support ZSTs
-        (unsafe { NonNull::new_unchecked(self.ptr.as_ptr().offset((self.len >> 1) as isize)) }, self.len - (self.len >> 1))
+        let ptr = if mem::size_of::<T>() == 0 {
+            self.ptr
+        } else {
+            unsafe { NonNull::new_unchecked(self.ptr.as_ptr().add(self.len >> 1)) }
+        };
+        (ptr, self.len - (self.len >> 1))
     }
 
     /// Convert this RcSliceData into an RcSliceMut. Unsafe b/c calling code
@@ -467,6 +470,7 @@ impl<T> Iterator for RcSliceParts<T> {
     #[inline]
     fn next(&mut self) -> Option<RcSlice<T>> { self.iter.next() }
     exact_size_hint!();
+    exact_count!();
 }
 
 impl<T> DoubleEndedIterator for RcSliceParts<T> {

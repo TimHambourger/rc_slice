@@ -83,6 +83,30 @@ fn clone_tolerates_small_slices() {
 }
 
 #[test]
+fn clone_and_split_zst() {
+    let slice = RcSlice::from_vec(vec![(); 7]);
+    assert_eq!(7, slice.len());
+    let clone = slice.clone();
+    assert_eq!(7, clone.len());
+    let left = RcSlice::clone_left(&slice);
+    let right = RcSlice::clone_right(&slice);
+    assert_eq!(3, left.len());
+    assert_eq!(4, right.len());
+    let left_clone = left.clone();
+    let right_clone = right.clone();
+    assert_eq!(3, left_clone.len());
+    assert_eq!(4, right_clone.len());
+    let left_left = RcSlice::clone_left(&left);
+    let left_right = RcSlice::clone_right(&left);
+    let right_left = RcSlice::clone_left(&right);
+    let right_right = RcSlice::clone_right(&right);
+    assert_eq!(1, left_left.len());
+    assert_eq!(2, left_right.len());
+    assert_eq!(2, right_left.len());
+    assert_eq!(2, right_right.len());
+}
+
+#[test]
 fn split_into_parts() {
     // A single test of many methods of RcSliceParts. Finer-grained unit
     // tests of the underlying implementation can be found in
@@ -158,6 +182,21 @@ fn debug_rc_slice_parts() {
     let parts = RcSlice::split_into_parts(slice, 2);
     println!("parts = {:?}", parts);
     assert!(format!("{:?}", parts).contains("RcSliceParts"));
+}
+
+#[test]
+fn split_into_parts_zst() {
+    let slice = RcSlice::from_vec(vec![(); 7]);
+    let mut parts = RcSlice::split_into_parts(slice, 4);
+    assert_eq!(7, parts.as_slice().len());
+    assert_eq!(2, parts.next_back().unwrap().len());
+    assert_eq!(5, parts.as_slice().len());
+    assert_eq!(2, parts.next_back().unwrap().len());
+    assert_eq!(3, parts.as_slice().len());
+    assert_eq!(2, parts.next_back().unwrap().len());
+    assert_eq!(1, parts.as_slice().len());
+    assert_eq!(1, parts.next_back().unwrap().len());
+    assert_eq!(0, parts.as_slice().len());
 }
 
 #[test]
@@ -378,4 +417,17 @@ fn into_mut_doesnt_drop() {
     drop(slice_mut);
     // Now items are dropped
     assert_eq!(["a", "b", "c"], dropped.get_items()[..]);
+}
+
+#[test]
+fn into_mut_zst() {
+    let mut slice = RcSlice::from_vec(vec![(); 4]);
+    let _left = RcSlice::clone_left(&slice);
+    let right = RcSlice::split_off_right(&mut slice);
+    let mut right = RcSlice::into_mut(right).unwrap();
+    assert_eq!(2, right.len());
+    // Pointless mutation
+    right[1] = ();
+    assert_eq!(2, right.len());
+    assert_eq!((), right[1]);
 }

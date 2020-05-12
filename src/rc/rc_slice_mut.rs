@@ -1,6 +1,5 @@
 use core::{
     convert::TryFrom,
-    mem,
     iter::FusedIterator,
     ops::{Deref, DerefMut},
     ptr::NonNull,
@@ -46,7 +45,6 @@ pub struct RcSliceMutParts<T> {
 
 impl<T> RcSliceMut<T> {
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
-        assert_ne!(0, mem::size_of::<T>(), "TODO: Support ZSTs");
         let (items, alloc) = unsafe { slice_model::split_alloc_from_items(slice) };
         Self { items, alloc: alloc.map(Rc::new) }
     }
@@ -218,6 +216,7 @@ impl<T> Iterator for RcSliceMutIter<T> {
     }
 
     exact_size_hint!();
+    exact_count!();
 }
 
 impl<T> DoubleEndedIterator for RcSliceMutIter<T> {
@@ -262,6 +261,7 @@ impl<T> Iterator for RcSliceMutParts<T> {
     }
 
     exact_size_hint!();
+    exact_count!();
 }
 
 impl<T> DoubleEndedIterator for RcSliceMutParts<T> {
