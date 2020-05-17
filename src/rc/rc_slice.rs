@@ -1,5 +1,5 @@
 use core::{
-    cell::{Cell, RefCell},
+    cell::{Cell, UnsafeCell},
     iter::FusedIterator,
     marker::PhantomData,
     mem,
@@ -20,36 +20,6 @@ use crate::{
     rc::RcSliceMut,
 };
 
-// Relationship btwn RcSlice, RcSliceData, and DataGuard:
-//
-// RcSlice          RcSliceData         DataGuard
-//
-//                 s  t  r  o  n  g
-//     |------------------------------------|
-//     |      strong              weak      v
-//   parent  ------->   parent  ------->  parent
-//                     s | ^                ^ s
-//                     t | | w              | t
-//                     r | | e              | r
-//                     o | | a              | o
-//                     n | | k              | n
-//            strong   g v |      weak      | g
-//    child  ------->   child   ------->  child
-//     |                                    ^
-//     |------------------------------------|
-//                 s  t  r  o  n  g
-//
-// Idea: Each RcSlice holds a strong ref to its RcSliceData. Parent
-// RcSliceDatas hold strong refs to their children RcSliceDatas, so that
-// dropping a child RcSlice doesn't cause its RcSliceData to get dropped
-// if there's still a parent RcSlice around. Each RcSlice also holds a
-// strong ref to a DataGuard, which in turn holds an optional strong ref
-// to its parent DataGuard. Idea there is an RcSlice can check whether it
-// holds the only strong ref to its RcSliceData as a way of checking
-// whether that data has any still-living ancestors, and it can check
-// whether it holds the only strong ref to its DataGuard as a way of
-// checking whether its data has any still-living descendants.
-
 pub (in crate::rc) struct RcSliceData<T> {
     ptr: NonNull<T>,
     len: usize,
@@ -62,33 +32,56 @@ pub (in crate::rc) struct RcSliceData<T> {
     left_child: Cell<Option<NonNull<()>>>,
     // Ditto left_child on really Cell<Option<NonNull<Self>>>
     right_child: Cell<Option<NonNull<()>>>,
-    parent: Weak<Self>,
-    guard: RefCell<Weak<DataGuard>>,
     phantom_item: PhantomData<T>,
     phantom_child: PhantomData<Self>,
 }
 
-/// Signals the presence of child RcSlices or WeakSlices for the same
-/// data subslice. Part of detecting which mutations are possible.
-struct DataGuard {
-    // Not used except in the fact that a child DataGuard keeps its
-    // parent DataGuard alive.
+/// Signals the presence of child RcSlices for the same data subslice.
+struct IntoMutGuard {
+    // Not used except implicitly in the fact that this IntoMutGuard
+    // keeps its ancestors alive.
     _parent: Option<Rc<Self>>,
+    left_child: UnsafeCell<Weak<Self>>,
+    right_child: UnsafeCell<Weak<Self>>,
+    // IntoMutGuard holds a strong ref to a GetMutGuard b/c any ref that
+    // prevents into_mut also prevents get_mut.
+    get_mut_guard: Rc<GetMutGuard>,
+}
+
+enum GetMutGuardChildType {
+    Left,
+    Right,
+}
+
+struct GetMutGuardParentage {
+    parent: Rc<GetMutGuard>,
+    // Is this GetMutGuard a left child or right child of its parent?
+    child_type: GetMutGuardChildType,
+}
+
+struct GetMutGuard {
+    parentage: Option<GetMutGuardParentage>,
+    left_child: UnsafeCell<Weak<Self>>,
+    right_child: UnsafeCell<Weak<Self>>,
+    into_mut_guard: UnsafeCell<Weak<IntoMutGuard>>,
 }
 
 /// A reference counted slice that tracks reference counts per
 /// subslice.
 pub struct RcSlice<T> {
     data: Rc<RcSliceData<T>>,
-    data_guard: Rc<DataGuard>,
+    // Presence of a strong ref to a subslice prevents calling into_mut
+    // on any ancestor subslice.
+    into_mut_guard: Rc<IntoMutGuard>,
 }
 
 /// A weak reference to a reference counted slice. Comparable to
 /// std::rc::Weak<[T]>.
 pub struct WeakSlice<T> {
     data: Weak<RcSliceData<T>>,
-    // Not used except as part of signaling the presence of WeakSlices to RcSlice::get_mut
-    _data_guard: Weak<DataGuard>,
+    // Presence of a weak ref to a subslice prevents calling get_mut
+    // (but not into_mut) on any ancestor subslice.
+    get_mut_guard: Rc<GetMutGuard>,
 }
 
 /// A double-ended iterator over roughly-even subslices of a starting RcSlice.
@@ -108,42 +101,28 @@ impl<T> RcSliceData<T> {
     }
 
     pub (in crate::rc) unsafe fn from_data_parts(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>) -> Self {
-        Self::with_data_and_parent(ptr, len, alloc, Weak::new())
-    }
-
-    fn with_data_and_parent(ptr: NonNull<T>, len: usize, alloc: Option<Rc<SliceAlloc<T>>>, parent: Weak<Self>) -> Self {
         Self {
             ptr,
             len,
             alloc,
-            parent,
             left_child: Cell::new(None),
             right_child: Cell::new(None),
-            guard: RefCell::new(Weak::new()),
             phantom_item: PhantomData,
             phantom_child: PhantomData,
         }
     }
 
     fn clone_left(self: &Rc<Self>) -> Rc<Self> {
-        if self.len == 0 {
-            self.clone()
-        } else {
-            let (ptr, len) = self.left_sub();
-            unsafe {
-                self.clone_child(&self.left_child, ptr, len)
-            }
+        let (ptr, len) = self.left_sub();
+        unsafe {
+            self.clone_child(&self.left_child, ptr, len)
         }
     }
 
     fn clone_right(self: &Rc<Self>) -> Rc<Self> {
-        if self.len <= 1 {
-            self.clone()
-        } else {
-            let (ptr, len) = self.right_sub();
-            unsafe {
-                self.clone_child(&self.right_child, ptr, len)
-            }
+        let (ptr, len) = self.right_sub();
+        unsafe {
+            self.clone_child(&self.right_child, ptr, len)
         }
     }
 
@@ -151,7 +130,7 @@ impl<T> RcSliceData<T> {
         child.get().map_or_else(
             || {
                 let alloc = if len == 0 { None } else { self.alloc.clone() };
-                let new = Rc::new(Self::with_data_and_parent(ptr, len, alloc, Rc::downgrade(self)));
+                let new = Rc::new(Self::from_data_parts(ptr, len, alloc));
                 let clone = new.clone();
                 child.set(Some(NonNull::new_unchecked(Rc::into_raw(new) as _)));
                 clone
@@ -247,31 +226,117 @@ impl<T> Deref for RcSliceData<T> {
     }
 }
 
-impl DataGuard {
-    fn guard<T>(data: &RcSliceData<T>) -> Rc<Self> {
-        let existing_guard = data.guard.borrow().upgrade();
-        existing_guard.unwrap_or_else(|| {
-            // No reference to a live existing guard. If our parent is still alive,
-            // guard IT and use that returned guard as our parent. Otherwise we have
-            // no parent guard.
-            let parent_guard = data.parent.upgrade()
-                .map(|parent_data| Self::guard(&parent_data));
-            let guard = Rc::new(Self { _parent: parent_guard });
-            // Save a weak ref to the new guard in the passed data instance
-            *data.guard.borrow_mut() = Rc::downgrade(&guard);
-            guard
+macro_rules! into_mut_guard_clone_child_fn {
+    ($child_method:ident, $child_field:ident) => {
+        fn $child_method(self: &Rc<Self>) -> Rc<Self> {
+            let child = unsafe { (*self.$child_field.get()).upgrade() };
+            child.unwrap_or_else(|| {
+                let get_mut_guard_child = self.get_mut_guard.$child_method();
+                let child = Rc::new(Self {
+                    _parent: Some(self.clone()),
+                    left_child: UnsafeCell::new(Weak::new()),
+                    right_child: UnsafeCell::new(Weak::new()),
+                    get_mut_guard: get_mut_guard_child,
+                });
+                unsafe {
+                    *child.get_mut_guard.into_mut_guard.get() = Rc::downgrade(&child);
+                    *self.$child_field.get() = Rc::downgrade(&child);
+                }
+                child
+            })
+        }
+    };
+}
+
+impl IntoMutGuard {
+    fn new() -> Rc<Self> {
+        let get_mut_guard = Rc::new(GetMutGuard {
+            parentage: None,
+            left_child: UnsafeCell::new(Weak::new()),
+            right_child: UnsafeCell::new(Weak::new()),
+            into_mut_guard: UnsafeCell::new(Weak::new()),
+        });
+        let into_mut_guard = Rc::new(Self {
+            _parent: None,
+            left_child: UnsafeCell::new(Weak::new()),
+            right_child: UnsafeCell::new(Weak::new()),
+            get_mut_guard,
+        });
+        unsafe { *into_mut_guard.get_mut_guard.into_mut_guard.get() = Rc::downgrade(&into_mut_guard) };
+        into_mut_guard
+    }
+
+    into_mut_guard_clone_child_fn!(clone_left, left_child);
+    into_mut_guard_clone_child_fn!(clone_right, right_child);
+}
+
+macro_rules! get_mut_guard_clone_child_fn {
+    ($child_method:ident, $child_field:ident, $child_type:ident) => {
+        fn $child_method(self: &Rc<Self>) -> Rc<Self> {
+            let child = unsafe { (*self.$child_field.get()).upgrade() };
+            child.unwrap_or_else(|| {
+                let child = Rc::new(Self {
+                    parentage: Some(GetMutGuardParentage { parent: self.clone(), child_type: GetMutGuardChildType::$child_type }),
+                    left_child: UnsafeCell::new(Weak::new()),
+                    right_child: UnsafeCell::new(Weak::new()),
+                    into_mut_guard: UnsafeCell::new(Weak::new()),
+                });
+                unsafe { *self.$child_field.get() = Rc::downgrade(&child) };
+                child
+            })
+        }
+    };
+}
+
+impl GetMutGuard {
+    fn new() -> Self {
+        Self {
+            parentage: None,
+            left_child: UnsafeCell::new(Weak::new()),
+            right_child: UnsafeCell::new(Weak::new()),
+            into_mut_guard: UnsafeCell::new(Weak::new()),
+        }
+    }
+
+    fn ensure_into_mut_guard(self: &Rc<Self>) -> Rc<IntoMutGuard> {
+        let existing_guard = unsafe { (*self.into_mut_guard.get()).upgrade() };
+        existing_guard.unwrap_or_else(|| match &self.parentage {
+            Some(GetMutGuardParentage { parent, child_type }) => {
+                let parent_into_mut_guard = parent.ensure_into_mut_guard();
+                // Calling clone_left/clone_right on the parent IntoMutGuard also
+                // ensures that the correct references are established btwn this
+                // GetMutGuard and the new child IntoMutGuard.
+                match child_type {
+                    GetMutGuardChildType::Left => parent_into_mut_guard.clone_left(),
+                    GetMutGuardChildType::Right => parent_into_mut_guard.clone_right(),
+                }
+            },
+            None => {
+                let guard = Rc::new(IntoMutGuard {
+                    _parent: None,
+                    left_child: UnsafeCell::new(Weak::new()),
+                    right_child: UnsafeCell::new(Weak::new()),
+                    get_mut_guard: self.clone(),
+                });
+                unsafe {
+                    *self.into_mut_guard.get() = Rc::downgrade(&guard);
+                }
+                guard
+            }
         })
     }
+
+    get_mut_guard_clone_child_fn!(clone_left, left_child, Left);
+    get_mut_guard_clone_child_fn!(clone_right, right_child, Right);
 }
 
 impl<T> RcSlice<T> {
-    pub (in crate::rc) fn from_data(data: Rc<RcSliceData<T>>) -> Self {
-        let data_guard = DataGuard::guard(&data);
-        Self { data, data_guard }
+    pub (in crate::rc) fn from_unique_data(data: Rc<RcSliceData<T>>) -> Self {
+        Self { data, into_mut_guard: IntoMutGuard::new() }
     }
 
     pub fn from_boxed_slice(slice: Box<[T]>) -> Self {
-        Self::from_data(Rc::new(RcSliceData::from_boxed_slice(slice)))
+        Self::from_unique_data(Rc::new(RcSliceData::from_boxed_slice(slice)))
     }
 
     pub fn from_vec(vec: Vec<T>) -> Self {
@@ -279,11 +344,23 @@ impl<T> RcSlice<T> {
     }
 
     pub fn clone_left(this: &Self) -> Self {
-        Self::from_data(this.data.clone_left())
+        if this.data.len == 0 {
+            this.clone()
+        } else {
+            let child_data = this.data.clone_left();
+            let child_guard = this.into_mut_guard.clone_left();
+            Self { data: child_data, into_mut_guard: child_guard }
+        }
     }
 
     pub fn clone_right(this: &Self) -> Self {
-        Self::from_data(this.data.clone_right())
+        if this.data.len <= 1 {
+            this.clone()
+        } else {
+            let child_data = this.data.clone_right();
+            let child_guard = this.into_mut_guard.clone_right();
+            Self { data: child_data, into_mut_guard: child_guard }
+        }
     }
 
     pub fn split_off_left(this: &mut Self) -> Self {
@@ -305,28 +382,19 @@ impl<T> RcSlice<T> {
     }
 
     pub fn get_mut(this: &mut Self) -> Option<&mut [T]> {
-        // We need to check for any RcSlices referencing ancestor or
-        // descendant RcSliceDatas, and we need to check for any RcSlices
-        // or WeakSlices referencing our own RcSliceData. We DON'T need to
-        // check for WeakSlices referencing ancestor or descendant
-        // RcSliceDatas: We hold no strong ref to any RcSliceData but our
-        // own, so the only way any WeakSlice could still hold an active
-        // reference to one of those other RcSliceDatas would be if there
-        // was also another RcSlice around.
-        // TODO: Ack! The last sentence above isn't right: Descendant
-        // WeakSlices create unsoundness w/ the current approach b/c just
-        // the strong ref this RcSlice holds to its RcSliceData is enough
-        // to keep that data and all its descendant datas alive. Refactor!
+        // We need to check for any RcSlices referencing ancestor
+        // RcSliceDatas, and we need to check for any RcSlices
+        // or WeakSlices referencing our own RcSliceData or any of its
+        // descendants. We DON'T need to check for WeakSlices referencing
+        // ancestor RcSliceDatas: RcSliceData strong refs go from parent to
+        // child, so the only way any WeakSlice could still hold an active
+        // reference to an ancestor RcSliceData would be if there was an
+        // ancestor RcSlice around.
         let safe_to_mut =
-            // We're the only strong ref to our data_guard. Checks that
-            // there are no child RcSlices.
-            1 == Rc::strong_count(&this.data_guard) &&
-            // We're the only strong ref to our data. Checks that there
-            // are no parent RcSlices.
+            // We're the only strong ref to our data
             1 == Rc::strong_count(&this.data) &&
-            // Our data holds the only weak ref to our data guard. Checks
-            // that there are no WeakSlices pointing to our same data.
-            1 == Rc::weak_count(&this.data_guard);
+            // Our into_mut_guard holds the only strong ref to its get_mut_guard
+            1 == Rc::strong_count(&this.into_mut_guard.get_mut_guard);
         if safe_to_mut {
             unsafe { Some(slice::from_raw_parts_mut((*this.data).ptr.as_ptr(), (*this.data).len)) }
         } else {
@@ -335,23 +403,23 @@ impl<T> RcSlice<T> {
     }
 
     pub fn into_mut(this: Self) -> Result<RcSliceMut<T>, Self> {
-        // Similar to get_mut. But now we don't care about WeakSlices
-        // referencing our own RcSliceData: As long as we're the only strong
-        // ref to that RcSliceData, the act of converting that RcSliceData into
-        // an RcSliceMut will invalidate those WeakSlices. This is the
-        // same reason Rc::try_unwrap only cares about strong refs.
-        if 1 == Rc::strong_count(&this.data_guard) {
-            let RcSlice { data, data_guard } = this;
+        // Similar to get_mut. But now we don't care about WeakSlices at all:
+        // As long as we're the only strong ref to our RcSliceData or any
+        // RcSliceData overlapping it, the act of converting that RcSliceData
+        // into an RcSliceMut will invalidate any overlapping WeakSlices. This
+        // is the same reason Rc::try_unwrap only cares about strong refs.
+        if 1 == Rc::strong_count(&this.into_mut_guard) {
+            let RcSlice { data, into_mut_guard } = this;
             Rc::try_unwrap(data)
                 .map(|data| unsafe { data.into_mut() })
-                .map_err(|data| RcSlice { data, data_guard })
+                .map_err(|data| RcSlice { data, into_mut_guard })
         } else {
             Err(this)
         }
     }
 
     pub fn downgrade(this: &Self) -> WeakSlice<T> {
-        WeakSlice { data: Rc::downgrade(&this.data), _data_guard: Rc::downgrade(&this.data_guard) }
+        WeakSlice { data: Rc::downgrade(&this.data), get_mut_guard: this.into_mut_guard.get_mut_guard.clone() }
     }
 
     // TODO: unsplit
@@ -363,7 +431,7 @@ impl<T> Clone for RcSlice<T> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
-            data_guard: self.data_guard.clone(),
+            into_mut_guard: self.into_mut_guard.clone(),
         }
     }
 }
@@ -401,10 +469,10 @@ hash_as_slice!(RcSlice);
 from_iter_via_vec!(RcSlice);
 
 impl<T> WeakSlice<T> {
-    /// Constructs a new `WeakSlice<T>`, without allocating any memory.
-    /// Calling `upgrade` on the return value always gives `None`.
+    /// Constructs a new `WeakSlice<T>` such that calling `upgrade` on the
+    /// return value always gives `None`.
     pub fn new() -> Self {
-        Self { data: Weak::new(), _data_guard: Weak::new() }
+        Self { data: Weak::new(), get_mut_guard: Rc::new(GetMutGuard::new()) }
     }
 
     pub fn upgrade(&self) -> Option<RcSlice<T>> {
@@ -427,13 +495,19 @@ impl<T> WeakSlice<T> {
         // Similarly, once we implement RcSlice::unsplit, we won't be able
         // to upgrade `weak` even if we were to join `left` and `right` back
         // into a single RcSlice spanning the entire original slice.
-        self.data.upgrade().map(RcSlice::from_data)
+        self.data.upgrade().map(|data| RcSlice {
+            data,
+            into_mut_guard: self.get_mut_guard.ensure_into_mut_guard()
+        })
     }
 }
 
 impl<T> Clone for WeakSlice<T> {
     fn clone(&self) -> Self {
-        Self { data: self.data.clone(), _data_guard: self._data_guard.clone() }
+        Self {
+            data: self.data.clone(),
+            get_mut_guard: self.get_mut_guard.clone()
+        }
     }
 }
 

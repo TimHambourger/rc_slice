@@ -354,12 +354,49 @@ fn downgrade_then_upgrade_with_gaps() {
     // be upgradeable.
     let child = weak_child.upgrade().unwrap();
     assert_eq!([3], child[..]);
-    // And we should know that presence of child means grandparent isn't
-    // mutable.
+    // And we should know that presence of child and weak_child means
+    // grandparent isn't mutable.
     assert!(RcSlice::get_mut(&mut grandparent).is_none());
     drop(child);
+    // Still not mutable -- we haven't dropped weak_child yet.
+    assert!(RcSlice::get_mut(&mut grandparent).is_none());
+    drop(weak_child);
     // Now grandparent is mutable.
     assert_eq!(&mut [0, 1, 2, 3], RcSlice::get_mut(&mut grandparent).unwrap());
+}
+
+#[test]
+fn downgrade_then_upgrade_siblings() {
+    let parent = RcSlice::from_vec(vec![0, 1, 2, 3]);
+    let left = RcSlice::clone_left(&parent);
+    let right = RcSlice::clone_right(&parent);
+    let weak_left = RcSlice::downgrade(&left);
+    let weak_right = RcSlice::downgrade(&right);
+    drop(left);
+    drop(right);
+    // Presence of parent means both weak children should be upgradeable.
+    let left = weak_left.upgrade().unwrap();
+    let right = weak_right.upgrade().unwrap();
+    // Now wanna exercise the fact that upgraded left and right subslices
+    // should have DIFFERENT into_mut_guards, meaning it should be possible
+    // for one to be convertible into RcSliceMut w/o the other being so.
+    // Test this by dropping parent, cloning right, then making sure left
+    // is still convertible into RcSliceMut.
+    drop(parent);
+    let right_clone = right.clone();
+    // Left should still be convertible into RcSliceMut.
+    let mut left = RcSlice::into_mut(left).unwrap();
+    // Mutable
+    left[0] = 5;
+    assert_eq!([5, 1], left[..]);
+    // Right should not be convertible into RcSliceMut, b/c of the clone.
+    let right = RcSlice::into_mut(right).unwrap_err();
+    drop(right_clone);
+    // NOW right is convertible into RcSliceMut.
+    let mut right = RcSlice::into_mut(right).unwrap();
+    // Mutable
+    right[1] = 6;
+    assert_eq!([2, 6], right[..]);
 }
 
 #[test]
@@ -396,6 +433,30 @@ fn into_mut_tolerates_weak_slices() {
     assert_eq!([0, 1, 2, 3, 4], slice[..]);
     // And weak_slice is no longer upgradeable
     assert!(weak_slice.upgrade().is_none());
+}
+
+#[test]
+fn into_mut_tolerates_weak_grandchildren() {
+    let grandparent = RcSlice::from_vec(vec![0, 1, 2, 3]);
+    let parent = RcSlice::clone_right(&grandparent);
+    let child = RcSlice::clone_right(&parent);
+    let weak_child = RcSlice::downgrade(&child);
+    drop(parent);
+    drop(child);
+    // Fact that grandparent is still alive is enough that weak_child
+    // should be upgradeable.
+    let child = weak_child.upgrade().unwrap();
+    assert_eq!([3], child[..]);
+    // And we should know that presence of child means grandparent can't
+    // be moved into an RcSliceMut.
+    let grandparent = RcSlice::into_mut(grandparent).unwrap_err();
+    drop(child);
+    // Should now be able to move grandparent into an RcSliceMut, even
+    // though weak_child is still alive.
+    let mut grandparent = RcSlice::into_mut(grandparent).unwrap();
+    // Can now borrow grandparent as mut
+    grandparent[2] = 5;
+    assert_eq!([0, 1, 5, 3], grandparent[..]);
 }
 
 #[test]

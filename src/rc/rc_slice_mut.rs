@@ -97,7 +97,7 @@ impl<T> RcSliceMut<T> {
         let RcSliceMut { items, mut alloc } = this;
         let (ptr, len) = SliceItems::into_raw_parts(items);
         let data = unsafe { Rc::new(RcSliceData::from_data_parts(ptr, len, alloc.take())) };
-        RcSlice::from_data(data)
+        RcSlice::from_unique_data(data)
     }
 
     // TODO: unsplit
